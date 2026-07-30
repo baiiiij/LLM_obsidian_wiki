@@ -277,6 +277,8 @@ return moe_align_block_size(
 - 只要 ≥5 个 token，或开了 EP → **必然调用 `moe_align_block_size`**
 - 结合 1.3 的序列并行：TP=8 时 32 token 被切成每卡 4 个，恰好触发捷径
 
+**适用范围辨析：naive 并非 decode 的默认路径**。捷径判断的是本 forward 的实际 token 数而非推理阶段：decode 阶段每请求每步 1 token，`num_tokens` = 并发请求数——单人调试或小流量（batch ≤ 4）才走 naive；生产高并发 decode（batch 几十~几百）与 prefill 都走对齐模式，此时专家共享增多，权重复用有利可图。此外：EP 开启时 `expert_map is None` 不满足、永不 naive；投机解码（MTP/EAGLE）下 `num_tokens = batch × (1+k)`，阈值更快被突破。该分支逐 step 动态判断，batch 随流量波动时路径可实时切换（两路径结果等价，纯性能启发式）。
+
 **naive 路径的下游执行与返回值语义**。
 
 `_prepare_expert_assignment` 在 naive 分支返回的三元组与 `moe_align_block_size` 形似而语义迥异，二者是同一份"生产者-消费者契约"的两种方言：

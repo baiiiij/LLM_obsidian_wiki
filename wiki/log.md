@@ -100,3 +100,9 @@
 - raw 文档 §3.3：同步扩充四个小节（微型例子 / 对的本质 / 共享代码 / roofline 分析）
 
 **关键知识点**：展平 topk_ids 的"值定位权重、下标定位 token（i//top_k）"；小 batch decode 是访存瓶颈，浪费的 tile 算力免费、省下的 kernel launch 才是收益；naive 仍是 grouped GEMM，只是每块有效行退化为 1。
+
+## [2026-07-30] ingest | naive 适用范围勘误（≠ decode 默认路径）
+
+**更新页面**：[[moe_align_block_size]]、raw 文档 §3.3
+
+**关键知识点**：naive 判断依据是本 forward 的 token 数而非推理阶段——decode 单人/小流量（batch≤4）才触发；生产高并发 decode 与 prefill 走对齐模式；EP 永不 naive；投机解码加速阈值突破；分支逐 step 动态切换、结果等价。

@@ -64,6 +64,21 @@ naive_block_assignment = (
 
 **对 Qwen3-30B-A3B（E=128, top-8）的推论**：仅当 `num_tokens ≤ 4` 且无 EP 时触发捷径。只要 ≥5 token 或开了 EP，**必然调用本 kernel**。
 
+### 适用范围：naive ≠ decode 默认路径
+
+naive 看的是**本 forward 的实际 token 数**，不是推理阶段。decode 阶段每请求每步 1 token，`num_tokens` = 并发请求数：
+
+| 场景 | num_tokens | 路径 |
+|---|---|---|
+| 单人调试（batch=1） | 1 | naive |
+| 小流量 decode（batch ≤ 4） | ≤4 | naive |
+| **生产高并发 decode（batch 几十~几百）** | ≥5 | **对齐模式** |
+| prefill（整段 prompt） | 几百~几千 | 对齐模式 |
+
+- **EP 开启 → 永不 naive**（`expert_map is None` 是硬条件）
+- **投机解码**（MTP/EAGLE）：`num_tokens = batch × (1+k)`，阈值更快被突破
+- 分支**每 step 动态判断**：连续批处理下 batch 随流量波动，路径可实时切换（两路径结果等价，纯性能启发式）
+
 ### naive 返回值的"两种方言"
 
 naive 三元组与本 kernel 的输出形似而语义迥异，是同一份"生产者-消费者契约"的两种方言：
