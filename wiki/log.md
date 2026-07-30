@@ -90,3 +90,13 @@
 - raw 文档 §3.3：补入下游执行分析（书面化）
 
 **关键知识点**：naive 模式 grid_m=numel（一块一对）；`offs_token=tl.where(offs==0, pid_m, num_valid)` 构造恒等映射砍掉 sorted_token_ids 间接表；阈值 tokens×top_k×4≤E 保证平均每专家≤1/4 对，对齐无收益。
+
+## [2026-07-30] ingest | naive 路径详解版（含微型例子与 roofline 分析）
+
+用户要求将 naive 路径的详细讲解（生动版）沉淀进 wiki。
+
+**更新页面**：
+- [[moe_align_block_size]]：naive 章节扩充——"对在下标里不在值里"的解读、2token/top2/E16 微型例子完整对照图、权重复用丧失的三层缓冲（L2/启发式/tile 浪费相同）、memory-bound vs compute-bound 的 roofline 分析
+- raw 文档 §3.3：同步扩充四个小节（微型例子 / 对的本质 / 共享代码 / roofline 分析）
+
+**关键知识点**：展平 topk_ids 的"值定位权重、下标定位 token（i//top_k）"；小 batch decode 是访存瓶颈，浪费的 tile 算力免费、省下的 kernel launch 才是收益；naive 仍是 grouped GEMM，只是每块有效行退化为 1。

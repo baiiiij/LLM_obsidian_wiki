@@ -29,7 +29,7 @@ tags: [vllm, moe, kernel, ep, dp, triton, 代码分析]
 - **monolithic vs modular 的本质**：输入是 `router_logits`（kernel 内路由）还是 `topk_ids/weights`（外部先路由）；method 层 monolithic 仅 CPU，MK 层还有 FlashInfer 类
 - **`supports_internal_mk`**：通信从"runner 外挂"迁移到"kernel 内置"的过渡开关
 - **naive_block_assignment 捷径**：无 EP 且 `tokens×top_k×4 ≤ E` 时跳过对齐；Qwen3-30B-A3B（E=128, top-8）仅 ≤4 token 触发
-- **naive 路径下游语义**（§3.3）：返回值"两种方言"对照；kernel constexpr 特化（"块 = 对"恒等映射，砍掉 sorted_token_ids 间接表）；阈值保证对齐无收益时才启用
+- **naive 路径下游语义**（§3.3）：返回值"两种方言"对照；kernel constexpr 特化（"块 = 对"恒等映射，砍掉 sorted_token_ids 间接表）；含微型例子完整推导与 roofline（memory-bound）分析
 - **序列并行联动**：TP=8 时 32 token → 每卡 4 个 → 恰好触发捷径
 - **EPLB**：逻辑/物理专家双层 ID；路由后映射 + 负载记录的融合 Triton kernel；后台 async rebalance
 - **通信节奏**：`_maybe_dispatch`（naive DP/EP all2all；PCP all-gather）→ kernel → `_maybe_combine`

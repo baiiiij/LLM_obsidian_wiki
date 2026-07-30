@@ -296,7 +296,95 @@ off_experts = tl.load(expert_ids_ptr + pid_m)              # 展平 topk_ids 的
 
 block `pid_m` 的第 0 条 lane 处理第 `pid_m` 个对，其余 `BLOCK_M-1` 条 lane 填越界值被 mask。两种模式共享同一份消费代码：`expert_ids[pid_m]` 查本块专家、`offs_token // top_k` 得 token 行号（展平 topk_ids 为 token-major，`pid_m // top_k` 即行号）、越界检查统一生效。设计精髓在于 **naive 模式把"对索引 = block 索引"做成恒等映射，整个砍掉了 `sorted_token_ids` 间接表**。
 
-naive 路径的收益与代价：收益是省掉 align kernel 的一次 launch 与设备同步、省掉排序与补位缓冲；代价是每个 BLOCK_M 宽的 tile 只有 1 行有效，浪费 `(BLOCK_M-1)/BLOCK_M` 的算力。启发式阈值 `tokens×top_k×4 ≤ E` 保证平均每个专家分到的对 ≤ 1/4——此时即使对齐也无法形成多样本块，浪费相同，故跳过预处理是纯收益。
+#### 微型例子：两种模式的完整对照
+
+设定：2 个 token，top_k=2，E=16 个专家，BLOCK_SIZE_M=4。路由器输出：
+
+```
+topk_ids = [[3, 7],     ← token 0 找专家 3、专家 7
+            [7, 12]]    ← token 1 找专家 7、专家 12（两个 token 都选了 E7）
+```
+
+**对齐模式**：计数（E3:1, E7:2, E12:1）→ 按专家排序 → 每段补齐到 4 的倍数：
+
+```
+槽位编号:  [ 0] [ 1] [ 2] [ 3] [ 4] [ 5] [ 6] [ 7] [ 8] [ 9] [10] [11]
+          ├────── E3 段 ──────┤├────── E7 段 ──────┤├────── E12 段 ────┤
+槽位内容:   p0    ✕    ✕    ✕    p1    p2    ✕    ✕    p3    ✕    ✕    ✕
+          └───── block 0 ─────┘└───── block 1 ─────┘└───── block 2 ────┘
+expert_ids:       E3                  E7                  E12
+```
+
+（`✕` = 补位越界值，被 mask；`p1,p2` 同处一块——**E7 权重加载一次同时算两个 token**）
+
+grid 启动 **3 个 block**。
+
+**naive 模式**：不预处理，直接返回 `(None, [3,7,7,12], 4×4=16)`，grid 启动 `16÷4=` **4 个 block**，一块一对：
+
+```
+block 0: expert_ids[0]=E3   offs=[0,✕,✕,✕]  → 只有第 0 行有效，算 (t0,E3)
+block 1: expert_ids[1]=E7   offs=[1,✕,✕,✕]  → 算 (t0,E7)
+block 2: expert_ids[2]=E7   offs=[2,✕,✕,✕]  → 算 (t1,E7)  ← E7 权重被第二个 block 再次读取
+block 3: expert_ids[3]=E12  offs=[3,✕,✕,✕]  → 算 (t1,E12)
+```
+
+#### "对"在哪里：在下标里，不在值里
+
+naive 模式没有构造任何"对"的数据结构——**对是展平数组下标的天然含义**。`topk_ids` 形状 `[num_tokens, top_k]`，行优先展开后：
+
+```
+展平数组（topk_ids.view(-1)）:
+
+  下标 i:     0        1        2        3
+  值:         3        7        7       12
+              │        │        │        │
+              ▼        ▼        ▼        ▼
+  含义:    t0选E3   t0选E7   t1选E7   t1选E12
+```
+
+- **值**（3,7,7,12）：回答"找哪个专家" → kernel 用它定位权重矩阵（`expert_ids[pid_m]` → `b_ptrs`）
+- **下标**（0,1,2,3）：回答"是哪个 token" → 每 token 占连续 top_k 格，`i // top_k` 即 token 行号（`a_ptrs`）
+
+对齐模式因为**按专家重排打乱了原始位置**，必须新建 `sorted_token_ids` 记录"新槽位 ↔ 原对索引"的映射；naive 保持路由器原始顺序，位置本身就是索引，映射恒等、无需存储。
+
+#### 为什么同一套 kernel 代码两种模式都能跑
+
+kernel 三处消费点在两种"方言"下恰好都成立：
+
+```python
+# ① 查本块专家
+off_experts = tl.load(expert_ids_ptr + pid_m)
+#    对齐：expert_ids[1]=E7（每块一个）；naive：展平 topk_ids 第 1 项，恰是本块的对
+
+# ② 拿 token 行号
+a_ptrs = a_ptr + (offs_token // top_k) * stride_am
+#    对齐：槽位值即对索引，2//2=token 1；naive：pid_m 即对索引，2//2=token 1
+
+# ③ 越界早退
+if pid_m * BLOCK_SIZE_M >= num_tokens_post_padded: return
+#    对齐：12=槽位总数 → pid_m≥3 退出；naive：16=对数×BLOCK_M → pid_m≥4 退出
+```
+
+#### naive 的代价：权重复用的丧失（以及为什么没关系）
+
+naive 放弃了 block 级权重复用：上例中 E7 被 block 1 和 block 2 各自读取（对齐模式下合并为一块、读一次算两行）。三层缓冲使该代价可控：
+
+1. **L2 cache 兜底**：两 block 调度时间接近时，第二次读 E7 权重大概率命中 L2（40-60MB），并非真的两次 HBM 读；kernel 开头的 `GROUP_SIZE_M` 分组排序（L397-407）即为此设计（"grouped ordering to promote L2 data reuse"）
+2. **启发式限制共享概率**：`对数×4 ≤ E` 意味着平均每 4 个专家才分到 1 个对，撞专家本就稀少
+3. **tile 浪费两种模式相同**：无共享时，对齐块里也是 1 有效行 + 3 补位
+
+本质视角（roofline 模型）：**小 batch decode 是 memory-bound（访存瓶颈）而非 compute-bound（算力瓶颈）**——
+
+| | 大 batch（compute-bound） | 小 batch decode（memory-bound） |
+|---|---|---|
+| 瓶颈 | SM 算力 | HBM 带宽（读权重） |
+| 浪费计算 lane | 真金白银 | **几乎免费**（SM 反正在等内存） |
+| 权重字节数 | 复用省带宽，对齐大胜 | 无共享可挖，两种模式相同 |
+| kernel launch 开销 | 占比小 | **48 层 × 每 decode step，占比显著** |
+
+naive 的收益账：省掉 align kernel（launch + 原子计数 + 前缀和 + scatter + 同步）× 48 层 × 每步；权重读取字节数与对齐模式相同；浪费的 tile 算力在 memory-bound 下无关紧要。它仍是 grouped GEMM（同一 kernel，`expert_ids[pid_m]` 按块选专家），只是每块有效行退化为 1。
+
+batch 增大后两个前提同时反转（专家共享增多 → 复用有利可图；进入 compute-bound → 算力浪费成真损失），启发式不再满足，自动切回对齐模式。阈值取 `E/4` 而非 `E`，正是要保证稀疏到"几乎不可能有专家共享"，使对齐无利可图。
 
 ### 3.4 分支⑥：EP 与否（`moe_align_block_size` 的两个语义）
 

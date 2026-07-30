@@ -74,6 +74,18 @@ naive 三元组与本 kernel 的输出形似而语义迥异，是同一份"生�
 | `expert_ids` | 每 BLOCK_M 槽位块一个专家（已排序） | 直接复用 `topk_ids.view(-1)`：每对（=每块）一个专家 |
 | `num_tokens_post_padded` | 有效槽位总数 | `numel × BLOCK_M`，编码"numel 个活跃块" |
 
+**"对"在下标里，不在值里**：`topk_ids` 形状 `[num_tokens, top_k]`，行优先展开后，**值**回答"找哪个专家"（定位权重），**下标**回答"是哪个 token"（`i // top_k` 得行号）。naive 不打乱路由器原始顺序，位置本身就是对索引，无需 `sorted_token_ids` 映射表。
+
+### 微型例子（2 token, top-2, E=16, BLOCK_M=4）
+
+```
+topk_ids = [[3, 7], [7, 12]]    ← t0→E3,E7；t1→E7,E12（共享 E7）
+```
+
+**对齐模式**（3 blocks）：E3 段 `[p0,✕,✕,✕]`、E7 段 `[p1,p2,✕,✕]`、E12 段 `[p3,✕,✕,✕]`——**E7 权重加载一次算两个 token**。
+
+**naive 模式**（4 blocks）：block 0-3 分别算 (t0,E3)、(t0,E7)、(t1,E7)、(t1,E12)，每块仅第 0 条 lane 有效——E7 被两个 block 各读一次。
+
 ### 下游 kernel 特化（`fused_moe.py` L419-434, L769-782）
 
 - grid：naive 时 `EM = numel × BLOCK_M` → `grid_m = numel`，**一个 block 对应一个 (token, expert) 对**
@@ -85,11 +97,12 @@ naive 三元组与本 kernel 的输出形似而语义迥异，是同一份"生�
 - 两种模式共享消费代码：`expert_ids[pid_m]` 查本块专家、`offs_token // top_k` 得 token 行号（展平 topk_ids 为 token-major）
 - **设计精髓**：naive 模式把"对索引 = block 索引"做成恒等映射，整个砍掉 `sorted_token_ids` 间接表
 
-### 收益与代价
+### 收益与代价（roofline 视角）
 
-- **收益**：省掉 align kernel 的 launch + 设备同步；省掉排序与补位缓冲
-- **代价**：每个 BLOCK_M 宽 tile 只有 1 行有效，浪费 `(BLOCK_M-1)/BLOCK_M` 算力
-- **阈值的意义**：`tokens×top_k×4 ≤ E` 保证平均每专家 ≤ 1/4 对——此时对齐也无法形成多样本块，浪费相同，跳过预处理是纯收益
+- **代价**：放弃 block 级权重复用（同一专家可能被多个 block 各读一次）。三层缓冲：L2 cache 兜底（`GROUP_SIZE_M` 分组排序促进 L2 复用）；启发式限制共享概率；无共享时 tile 浪费两种模式相同
+- **收益**：省掉 align kernel（launch + 原子计数 + 前缀和 + scatter + 同步）× 48 层 × 每 decode step
+- **本质**：小 batch decode 是 **memory-bound**——浪费的计算 lane 几乎免费（SM 反正在等内存），省下的 launch 开销是真金白银。batch 增大进入 compute-bound 后自动切回对齐模式
+- **阈值意义**：`tokens×top_k×4 ≤ E` 保证平均每专家 ≤ 1/4 对，稀疏到对齐也合并不出多样本块，跳过预处理是纯收益
 
 ## 与序列并行的联动
 
