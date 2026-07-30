@@ -11,15 +11,22 @@ updated: 2026-07-30
 
 ## Entities（实体）
 
-_（暂无）_
+- [[vLLM]] — 主流 LLM 推理框架；fused MoE 路径与定长缓冲设计哲学
+- [[DeepSeek]] — MoE 架构大模型系列，DP+EP 混合部署的典型代表
+- [[Triton]] — Python 风格 GPU 算子 DSL，vLLM MoE kernel 的实现语言
 
 ## Concepts（概念）
 
-_（暂无）_
+- [[MoE]] — 混合专家模型：路由 + top-k 稀疏激活，决定底层算子形态
+- [[moe_align_block_size]] — vLLM MoE 布局整理算子：散乱路由输出 → 定长对齐布局
+- [[Grouped GEMM]] — MoE 的核心计算形态：同专家 token 共享权重，按块复用
+- [[专家并行 EP]] — 专家切分到多卡；expert_map 与 -1 跳过机制
+- [[数据并行 DP]] — token 切分到多卡；All-to-All Dispatch/Combine 流水线
+- [[CUDA Graph]] — 定形约束与"形状恒定化"应对思路
 
 ## Sources（来源摘要）
 
-_（暂无）_
+- [[moe_align_block_size-交互式详解]] — vLLM `moe_align_block_size` 交互式讲解（基础版 / EP / DP 三场景）
 
 ## Queries（问答沉淀）
 

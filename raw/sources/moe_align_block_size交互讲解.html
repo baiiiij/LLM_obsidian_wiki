@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM moe_align_block_size 交互式详解（含 EP / DP）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #f6f7f9; color: #222; line-height: 1.75; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 26px; margin-bottom: 6px; }
+  .sub { color: #666; margin-bottom: 24px; }
+  h2 { font-size: 21px; margin: 40px 0 10px; padding-left: 10px; border-left: 4px solid #C0392B; }
+  h3 { font-size: 17px; margin: 22px 0 8px; }
+  p { margin: 10px 0; }
+  code { background: #eee; padding: 1px 6px; border-radius: 4px; font-family: "SF Mono", Consolas, monospace; font-size: 0.92em; }
+  pre { background: #1e1e2e; color: #d4d4d4; padding: 16px 18px; border-radius: 10px;
+        overflow-x: auto; font-size: 13.5px; line-height: 1.6; margin: 14px 0; }
+  pre .c { color: #8b949e; }
+  table { border-collapse: collapse; margin: 14px 0; width: 100%; background: #fff; }
+  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; font-size: 14px; vertical-align: top; }
+  th { background: #f0f0f2; }
+  .hl { background: #fff7e6; border-left: 4px solid #ED7D31; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 14px 0; }
+  ul { margin: 8px 0 8px 22px; }
+
+  /* ===== 交互播放器 ===== */
+  .player { background: #fff; border-radius: 14px; box-shadow: 0 2px 12px rgba(0,0,0,.07);
+            padding: 18px 20px 22px; margin: 18px 0 8px; }
+  .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+              border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 14px; }
+  .controls button { border: 1px solid #ccc; background: #fff; border-radius: 8px;
+                     padding: 6px 14px; font-size: 14px; cursor: pointer; }
+  .controls button:hover:not(:disabled) { background: #f0f0f2; }
+  .controls button:disabled { opacity: .4; cursor: default; }
+  .controls .play { background: #C0392B; color: #fff; border-color: #C0392B; min-width: 92px; }
+  .controls .play:hover { background: #a93226; }
+  .controls select { border: 1px solid #ccc; border-radius: 8px; padding: 6px 8px; font-size: 14px; }
+  .dots { display: flex; gap: 6px; margin-left: 6px; flex-wrap: wrap; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: #ddd; cursor: pointer; }
+  .dot.on { background: #C0392B; }
+  .step-title { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+  .step-desc { color: #555; font-size: 14px; margin-bottom: 14px; min-height: 44px; }
+  .stage { background: #fafbfc; border: 1px solid #eee; border-radius: 10px; padding: 18px; overflow-x: auto; }
+
+  /* ===== 槽位/块 ===== */
+  .srow { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
+  .cell { width: 52px; height: 58px; border: 1.5px solid #333; border-radius: 7px;
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          background: #fff; flex: 0 0 auto; }
+  .cell .v { font-size: 15px; font-weight: 700; }
+  .cell .s { font-size: 10.5px; color: rgba(0,0,0,.72); }
+  .cell.mid { width: 42px; height: 50px; } .cell.mid .v { font-size: 13px; } .cell.mid .s { font-size: 9.5px; }
+  .cell.tiny { width: 33px; height: 44px; border-radius: 5px; } .cell.tiny .v { font-size: 11px; } .cell.tiny .s { font-size: 8.5px; }
+  .cell.pad { background: repeating-linear-gradient(45deg,#e3e3e3,#e3e3e3 5px,#d2d2d2 5px,#d2d2d2 10px); }
+  .cell.pad .v { color: #777; font-size: 10px; }
+  .cell.inv { background: #4a4a4a; border-color: #4a4a4a; } .cell.inv .v, .cell.inv .s { color: #ccc; }
+  .cell.wcell { width: 96px; } .cell.wcell .v { color: #fff; } .cell.wcell .s { color: rgba(255,255,255,.85); }
+  .rrow { display: flex; gap: 5px; align-items: center; margin: 5px 0; }
+  .tlabel { width: 76px; text-align: right; font-weight: 700; font-size: 14px; flex: 0 0 auto; }
+  .seplab { font-size: 12px; font-weight: 700; margin: 0 6px; white-space: nowrap; }
+  .vsep { width: 0; border-left: 2px dashed #999; height: 52px; margin: 0 4px; flex: 0 0 auto; }
+  .bwrap { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+  .bframe { border: 2.5px solid #C0392B; border-radius: 10px; padding: 8px 8px 6px; }
+  .bframe .bslots { display: flex; gap: 4px; }
+  .bframe .blab { text-align: center; font-size: 12.5px; font-weight: 700; color: #C0392B; margin-top: 6px; white-space: pre-line; line-height: 1.35; }
+  .bframe.bskip { border-color: #999; border-style: dashed; opacity: .42; }
+  .bframe.bskip .blab { color: #777; }
+  .grow { display: flex; gap: 5px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+  .blabel { width: 44px; text-align: right; font-weight: 700; font-size: 13px; flex: 0 0 auto; }
+  .arrow { font-size: 20px; color: #555; margin: 0 6px; }
+  .gformula { font-size: 12.5px; color: #555; margin-left: 10px; }
+  .gpubox { display: inline-block; border: 2px solid #2E86C1; border-radius: 10px; padding: 10px 14px; margin: 6px 10px 6px 0; background: #EBF5FB; vertical-align: top; }
+  .gpubox b { color: #2E86C1; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 700; border-radius: 5px; padding: 1px 7px; margin-left: 6px; vertical-align: middle; }
+  .tag.local { background: #D5F5E3; color: #1E8449; }
+  .tag.remote { background: #FADBD8; color: #922B21; }
+  .note { font-size: 13px; color: #666; margin-top: 12px; }
+  .flow { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .dpcard { border: 2px solid #2E86C1; border-radius: 10px; padding: 8px 12px; background: #EBF5FB; }
+  .dpcard b { font-size: 13px; color: #2E86C1; display: block; margin-bottom: 6px; }
+  .toks { display: flex; gap: 4px; flex-wrap: wrap; }
+  .tok { width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid #333;
+         display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; }
+  .bigarrow { font-size: 30px; color: #C0392B; font-weight: 700; text-align: center; line-height: 1.2; }
+  .bigarrow small { display: block; font-size: 11.5px; color: #922B21; }
+  .park { border: 2px solid #555; border-radius: 10px; padding: 10px 12px; background: #fff; }
+  .cell.empty { background: #fff; border-style: dashed; border-color: #aaa; }
+  .countchip { display: inline-block; border-radius: 6px; padding: 2px 9px; color: #fff; font-weight: 700; font-size: 12.5px; margin: 2px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 10px 0 2px; font-size: 12.5px; align-items: center; }
+  .lg { display: flex; align-items: center; gap: 5px; }
+  .sw { width: 15px; height: 15px; border-radius: 4px; border: 1px solid #333; display: inline-block; }
+  .sw.pad { background: repeating-linear-gradient(45deg,#e3e3e3,#e3e3e3 3px,#d2d2d2 3px,#d2d2d2 6px); }
+  .sw.inv { background: #4a4a4a; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>vLLM <code>moe_align_block_size</code> 交互式详解</h1>
+  <p class="sub">基础原理 · 专家并行（EP / expert_map）· 数据并行（DP / batched 变体）—— 所有图示均可手动步进控制</p>
+
+  <div class="hl"><b>一句话作用</b>：把路由器输出的散乱 <code>topk_ids</code> 整理成「按专家连续存放、每个专家的槽位数补齐到 block_size 整数倍」的布局，让 grouped GEMM 的每个线程块<b>只查一次专家号、整块复用同一个权重矩阵</b>。</div>
+
+  <h2>场景一：基础版 moe_align_block_size</h2>
+  <p>示例：8 个 token、top-2、4 个专家、block_size = 4。点击「下一步 / 上一步」逐帧查看，也可用「播放」自动演示（速度可选）。</p>
+  <div class="player" id="p1"></div>
+
+  <h2>场景二：专家并行（EP）时有什么不同</h2>
+  <p>EP 把 N 个专家切到多张卡上。此时 <code>num_experts</code> 传<b>全局</b>专家数，并传入 <code>expert_map</code>（全局专家号 → 本卡局部号，不在本卡的记为 -1）。函数有两种工作模式：</p>
+  <ul>
+    <li><b>默认模式（<code>ignore_invalid_experts=False</code>）</b>：先对<b>全部</b>全局专家做计数、排序、补齐（所有 token 都参与对齐），返回前把 <code>expert_ids</code> 经 <code>expert_map</code> 映射——非本卡专家的块被标成 <b>-1</b>，MoE GEMM kernel 遇到 -1 直接跳过该块。</li>
+    <li><b>过滤模式（<code>ignore_invalid_experts=True</code>）</b>：计数阶段就直接忽略非本卡专家，它们的 token 不参与对齐，缓冲更小，<code>expert_ids</code> 里也不会出现 -1。</li>
+  </ul>
+  <p>示例：8 个全局专家、EP=2（Rank 0 持有 E0–E3，Rank 1 持有 E4–E7）、8 个 token、top-2、block_size = 4。</p>
+  <div class="player" id="p2"></div>
+
+  <h2>场景三：数据并行（DP）—— batched_moe_align_block_size</h2>
+  <p>这个变体不是凭空多出来的，它是为 <b>DP（数据并行）+ EP（专家并行）</b> 部署（典型代表：DeepSeek 系列）量身定做的。要理解它，先得看清楚 MoE 层每一步的完整流水线：</p>
+  <ol style="margin:8px 0 8px 24px">
+    <li>每张 DP 卡各拿一批 token，各自跑路由器，确定每个 token 该去哪些专家；</li>
+    <li><b>All-to-All Dispatch</b>：通过网络把每个 token 发送到「持有它目标专家的那张卡」；</li>
+    <li>每张卡只对自己持有的专家做 GEMM 计算；</li>
+    <li><b>All-to-All Combine</b>：把算完的结果发回原卡，按路由权重加权求和。</li>
+  </ol>
+  <p>麻烦出在第 ② → ③ 步之间：<b>每一步、每个专家能收到多少 token 完全是随机的</b>。如果按实际数量现分内存，张量形状步步都变——CUDA Graph 没法捕获（它要求所有张量形状固定），通信和计算 kernel 也没法做定长优化。vLLM 的对策：Dispatch 直接把 token 写进一块<b>形状恒定的缓冲</b> <code>(E × max_tokens_per_batch, K)</code>——每个专家固定占一排位置，来几个写几个，空着就空着，再配一个 <code>expert_num_tokens</code> 数组记录每排实际有几个有效。</p>
+  <p>这时 <code>batched_moe_align_block_size</code> 的活就很简单了：token <b>已经被通信层按专家分好段</b>，它不用像基础版那样先做排序，只负责「打包」——把每排的有效 token 数向上凑成 block_size 的整数倍，生成和基础版语义完全相同的三个输出。下面用一个<b>停车场类比</b>一步步走：<b>每个专家有一排固定的 8 个车位，token 是车，GEMM 按 4 辆一卡车拉走</b>。</p>
+  <p>示例：5 个专家（E = 5）、每排 8 个车位（max_tokens_per_batch = 8）、block_size = 4、本轮实停 <code>expert_num_tokens = [2, 3, 0, 6, 8]</code>。</p>
+  <div class="player" id="p3"></div>
+
+  <h2>附：输入输出与 kernel 消费方式</h2>
+  <table>
+    <tr><th style="width:210px">参数 / 返回</th><th>含义</th></tr>
+    <tr><td><code>topk_ids</code></td><td>[num_tokens, top_k]，每个 token 选中的专家编号（EP 时为全局专家号）</td></tr>
+    <tr><td><code>block_size</code></td><td>GEMM 块长，即 kernel 的 BLOCK_M（通常 16/32/64）</td></tr>
+    <tr><td><code>num_experts</code></td><td>专家总数；EP 场景必须是<b>全局</b>专家数</td></tr>
+    <tr><td><code>expert_map</code></td><td>全局 → 本卡局部专家号映射；不在本卡的为 -1</td></tr>
+    <tr><td><code>ignore_invalid_experts</code></td><td>True：计数阶段直接忽略非本卡专家；False：全部对齐后把非本卡块标 -1</td></tr>
+    <tr><td><code>sorted_token_ids</code>（出）</td><td>对齐后的槽位下标；槽位 i ↔ 激活第 i//top_k 行；补位填 numel（越界值，被 mask）</td></tr>
+    <tr><td><code>expert_ids</code>（出）</td><td>第 i 个块用哪个专家；-1 表示整块跳过</td></tr>
+    <tr><td><code>num_tokens_post_padded</code>（出）</td><td>补齐后的总槽位数，决定 GEMM grid 大小</td></tr>
+  </table>
+  <pre><span class="c"># fused_moe_kernel 中（简化）</span>
+pid_m = tl.program_id(0)
+e     = tl.load(expert_ids_ptr + pid_m)              <span class="c"># 整块只查一次专家号；-1 则整块跳过</span>
+offs  = tl.load(sorted_token_ids_ptr + pid_m*BLOCK_M + arange(BLOCK_M))
+mask  = offs &lt; numel                                  <span class="c"># PAD 槽位被屏蔽，结果丢弃</span>
+a_ptrs = a_ptr + (offs // top_k) * stride_am         <span class="c"># 槽位号 → 激活行号</span>
+b_ptrs = b_ptr + e * stride_be                       <span class="c"># 整块复用权重 W_e</span></pre>
+  <ul>
+    <li><b>实现</b>：三段式（原子加计数 → 带 pad 前缀和 → scatter 写回），输出缓冲按上界 <code>numel + num_experts×(block_size−1)</code> 预分配。</li>
+    <li><b>开销</b>：只处理 num_tokens×top_k 个 int32 下标，相对后续 GEMM 可忽略。</li>
+    <li><b>注意</b>：当前 main 分支官方 docstring 中 batched 示例的 <code>expert_ids</code> 有个小笔误（写作 <code>[0,1,3,3,4,5,5]</code>），按 golden 测试的正确结果是 <code>[0,1,3,3,4,4]</code>——本页面按正确行为绘制。</li>
+  </ul>
+</div>
+
+<script>
+const PAL = ['#5B9BD5','#ED7D31','#70AD47','#9E6BB5','#E8C84A','#3AB7B0','#D6699E','#98A4B3'];
+const ec = e => e >= 0 ? PAL[e % PAL.length] : '#999';
+
+function cell(o) {
+  let cls = 'cell ' + (o.size || ''), style = '';
+  if (o.pad) cls += ' pad';
+  else if (o.inv) cls += ' inv';
+  else if (o.e !== undefined && o.e >= 0) style = `background:${ec(o.e)}`;
+  return `<div class="${cls}" style="${style}"><span class="v">${o.v ?? ''}</span>` +
+         (o.sub !== undefined ? `<span class="s">${o.sub}</span>` : '') + `</div>`;
+}
+const row = (cells, cls = '') => `<div class="srow ${cls}">${cells.join('')}</div>`;
+
+function legend(experts, extra = '') {
+  let h = '<div class="legend">';
+  for (const e of experts) h += `<span class="lg"><span class="sw" style="background:${ec(e)}"></span>专家 E${e}</span>`;
+  h += `<span class="lg"><span class="sw pad"></span>PAD 槽位（填 numel，被 mask）</span>`;
+  if (extra) h += extra;
+  return h + '</div>';
+}
+
+function routingTable(T) {
+  let h = '';
+  T.forEach((pair, r) => {
+    h += `<div class="rrow"><span class="tlabel">token ${r}</span>`;
+    pair.forEach((e, c) => { h += cell({ v: `E${e}`, sub: `槽位 ${r * pair.length + c}`, e }); });
+    h += '</div>';
+  });
+  return h;
+}
+
+function flatRow(flat, size = 'mid', mark) {
+  return row(flat.map((e, i) => {
+    const o = { v: i, sub: `E${e}`, e, size };
+    if (mark) Object.assign(o, mark(e, i) || {});
+    return cell(o);
+  }));
+}
+
+function groupRow(groups, counts, padded, numel, size = 'mid') {
+  const cells = [];
+  groups.forEach((g, e) => {
+    g.forEach(sid => cells.push(cell({ v: sid, e, size })));
+    for (let k = 0; k < padded[e] - counts[e]; k++) cells.push(cell({ v: 'PAD', pad: 1, size }));
+    if (e < groups.length - 1) cells.push('<span class="vsep"></span>');
+  });
+  return row(cells);
+}
+
+function blocksView(sortedIds, ids, numel, bs, labels) {
+  let h = '<div class="bwrap">';
+  ids.forEach((e, b) => {
+    const skip = e < 0;
+    const slots = sortedIds.slice(b * bs, (b + 1) * bs);
+    const cells = slots.map((sid, j) => sid >= numel
+      ? cell({ v: 'PAD', pad: 1, size: 'tiny' })
+      : cell({ v: sid, e: labels ? labels.slotE[b][j] : e, size: 'tiny' }));
+    h += `<div class="bframe ${skip ? 'bskip' : ''}"><div class="bslots">${cells.join('')}</div>` +
+         `<div class="blab">块 ${b}\n${labels ? labels.text[b] : 'E' + e}</div></div>`;
+  });
+  return h + '</div>';
+}
+
+/* ================= 播放器 ================= */
+function makePlayer(id, steps) {
+  const el = document.getElementById(id);
+  el.innerHTML = `
+    <div class="controls">
+      <button class="prev">◀ 上一步</button>
+      <button class="play">▶ 播放</button>
+      <button class="next">下一步 ▶</button>
+      <select class="speed">
+        <option value="4500">慢速（4.5 秒/步）</option>
+        <option value="2800" selected>中速（2.8 秒/步）</option>
+        <option value="1500">快速（1.5 秒/步）</option>
+      </select>
+      <span class="dots">${steps.map((_, i) => `<span class="dot" data-i="${i}" title="第 ${i + 1} 步"></span>`).join('')}</span>
+    </div>
+    <div class="step-title"></div>
+    <div class="step-desc"></div>
+    <div class="stage"></div>`;
+  let idx = 0, timer = null;
+  const q = s => el.querySelector(s);
+  function render() {
+    const st = steps[idx];
+    q('.step-title').textContent = `第 ${idx + 1} / ${steps.length} 步：${st.title}`;
+    q('.step-desc').innerHTML = st.desc;
+    q('.stage').innerHTML = st.html;
+    el.querySelectorAll('.dot').forEach((d, i) => d.classList.toggle('on', i === idx));
+    q('.prev').disabled = idx === 0;
+    q('.next').disabled = idx === steps.length - 1;
+  }
+  function stop() { clearInterval(timer); timer = null; q('.play').textContent = '▶ 播放'; }
+  q('.prev').onclick = () => { stop(); if (idx > 0) { idx--; render(); } };
+  q('.next').onclick = () => { stop(); if (idx < steps.length - 1) { idx++; render(); } };
+  q('.play').onclick = () => {
+    if (timer) { stop(); return; }
+    if (idx >= steps.length - 1) { idx = 0; render(); }
+    q('.play').textContent = '⏸ 暂停';
+    timer = setInterval(() => {
+      if (idx < steps.length - 1) { idx++; render(); } else stop();
+    }, +q('.speed').value);
+  };
+  q('.speed').onchange = () => { if (timer) { const f = q('.play').onclick; stop(); f(); } };
+  el.querySelectorAll('.dot').forEach(d => d.onclick = () => { stop(); idx = +d.dataset.i; render(); });
+  render();
+}
+
+/* ================= 场景一：基础版 ================= */
+const T1 = [[0,1],[2,0],[1,1],[3,2],[0,3],[2,2],[1,0],[3,1]];
+const flat1 = T1.flat(), N1 = 16;
+const g1 = [[0,3,8,13],[1,4,5,12,15],[2,7,10,11],[6,9,14]];
+const cnt1 = [4,5,4,3], pad1 = [4,8,4,4];
+const sorted1 = [0,3,8,13, 1,4,5,12,15,16,16,16, 2,7,10,11, 6,9,14,16];
+const eids1 = [0,1,1,2,3];
+
+const steps1 = [
+  { title: '路由结果：8 个 token，每个选 top-2 个专家',
+    desc: 'topk_ids 形状 [8, 2]。展平后得到 16 个槽位：槽位 i 对应激活矩阵第 i//2 行，它要被路由到 flat[i] 号专家。',
+    html: routingTable(T1) + legend([0,1,2,3]) },
+  { title: '展平 topk_ids：16 个槽位（原始顺序）',
+    desc: '同一颜色 = 同一专家。各专家的 token 在内存中散乱分布，无法直接批量做 GEMM。',
+    html: flatRow(flat1) + legend([0,1,2,3]) },
+  { title: '按专家号排序：同一专家的槽位聚到一起',
+    desc: '各专家槽位计数 cnt = [4, 5, 4, 3]。但 grouped GEMM 按固定块长 BLOCK_M=4 处理，<b>块不能跨专家</b>——直接这样切块，E1 和 E2 之间会出现跨界块。',
+    html: row(g1.flatMap((g, e) => g.map(sid => cell({ v: sid, e, size: 'mid' }))
+      .concat(e < 3 ? ['<span class="vsep"></span>'] : []))) +
+      `<div class="note">E0：4 个　|　E1：5 个　|　E2：4 个　|　E3：3 个</div>` + legend([0,1,2,3]) },
+  { title: '核心一步：每个专家向上补齐到 block_size 的整数倍',
+    desc: 'pad 后各专家槽数 = [4, 8, 4, 4]，总长 num_tokens_post_padded = 20。补的槽位填 numel=16（非法下标），后续 GEMM 遇到就 mask 掉。',
+    html: groupRow(g1, cnt1, pad1, N1) +
+      `<div class="note">E0：4→4　|　E1：5→<b>8</b>　|　E2：4→4　|　E3：3→<b>4</b>（粗体为补齐）</div>` + legend([0,1,2,3]) },
+  { title: '按 block_size=4 切块 → 每个块恰好只属于一个专家',
+    desc: 'expert_ids[i] 记录第 i 个块该用哪个专家的权重矩阵。E1 占了 2 个块，所以出现两个 1。从此「专家段边界」与「块边界」完全重合。',
+    html: blocksView(sorted1, eids1, N1, 4) +
+      `<div class="note" style="font-family:monospace">expert_ids = [0, 1, 1, 2, 3]　　num_tokens_post_padded = 20（grid = 5 块）</div>` + legend([0,1,2,3]) },
+  { title: 'Grouped GEMM：整块只查一次专家号，整块复用权重矩阵',
+    desc: '格子里显示的是激活矩阵 A 的行号（= 槽位号 // top_k）。PAD 行被 mask，计算结果被丢弃。权重指针 b_ptr + e×stride 整块只算一次。',
+    html: eids1.map((e, b) => {
+      const slots = sorted1.slice(b * 4, b * 4 + 4);
+      return `<div class="grow"><span class="blabel">块${b}</span>` +
+        slots.map(sid => sid >= N1 ? cell({ v: 'PAD', pad: 1, size: 'mid' })
+          : cell({ v: Math.floor(sid / 2), sub: `槽${sid}`, e, size: 'mid' })).join('') +
+        `<span class="arrow">→</span>` + cell({ v: `W_E${e}`, sub: '整块复用', e, size: 'wcell' }) +
+        `<span class="gformula">out[行] += A[行] @ W_E${e}</span></div>`;
+    }).join('') + legend([0,1,2,3]) },
+  { title: '输出总结',
+    desc: 'moe_align_block_size 返回三个张量，供 fused_moe_kernel 直接消费。',
+    html: `<pre style="margin:0">输入：topk_ids = [[0,1],[2,0],[1,1],[3,2],[0,3],[2,2],[1,0],[3,1]]，block_size = 4，num_experts = 4
+
+输出① sorted_token_ids = [0,3,8,13 | 1,4,5,12,15,16,16,16 | 2,7,10,11 | 6,9,14,16]   <span class="c"># 长度 20</span>
+输出② expert_ids       = [0, 1, 1, 2, 3]      <span class="c"># 第 i 块用哪个专家</span>
+输出③ num_tokens_post_padded = 20             <span class="c"># GEMM grid = 20/4 = 5 块</span></pre>` }
+];
+
+/* ================= 场景二：EP ================= */
+const T2 = [[0,1],[4,0],[1,5],[6,2],[0,7],[1,4],[0,5],[2,6]];
+const flat2 = T2.flat(), N2 = 16;
+const g2 = [[0,3,8,12],[1,4,10],[7,14],[],[2,11],[5,13],[6,15],[9]];
+const cnt2 = [4,3,2,0,2,2,2,1], pad2 = [4,4,4,0,4,4,4,4];
+const sorted2 = [0,3,8,12, 1,4,10,16, 7,14,16,16, 2,11,16,16, 5,13,16,16, 6,15,16,16, 9,16,16,16];
+const geids2 = [0,1,2,4,5,6,7];
+const map0 = [0,1,2,3,-1,-1,-1,-1], map1 = [-1,-1,-1,-1,0,1,2,3];
+const mids0 = geids2.map(e => map0[e]), mids1 = geids2.map(e => map1[e]);
+const slotE2 = geids2.map(e => [e,e,e,e]);
+const ex8 = [0,1,2,3,4,5,6,7];
+
+const gpuSetup = `<div>
+  <span class="gpubox"><b>GPU 0（Rank 0）</b><br>持有专家 E0 E1 E2 E3<br><span style="font-family:monospace;font-size:12px">expert_map = [0, 1, 2, 3, -1, -1, -1, -1]</span></span>
+  <span class="gpubox"><b>GPU 1（Rank 1）</b><br>持有专家 E4 E5 E6 E7<br><span style="font-family:monospace;font-size:12px">expert_map = [-1, -1, -1, -1, 0, 1, 2, 3]</span></span>
+</div>`;
+
+function epBlocks(mids, rankLocalHi) {
+  return blocksView(sorted2, mids, N2, 4, {
+    slotE: slotE2,
+    text: geids2.map((g, b) => mids[b] >= 0 ? `E${g} → 局部 E${mids[b]}` : `E${g} → -1（跳过）`)
+  });
+}
+
+const steps2 = [
+  { title: '场景设定：EP=2，8 个全局专家切到 2 张卡',
+    desc: '每张卡只持有 4 个专家的权重。num_experts 传全局值 8，expert_map 把全局专家号映射为本卡局部号，不在本卡的记为 -1。',
+    html: gpuSetup + legend(ex8) },
+  { title: '路由结果：token 可能选中任何全局专家',
+    desc: '以 Rank 0 视角标注：<span class="tag local">本卡</span> = 选中 E0–E3；<span class="tag remote">他卡</span> = 选中 E4–E7。8 个 token、top-2。',
+    html: T2.map((pair, r) => `<div class="rrow"><span class="tlabel">token ${r}</span>` +
+      pair.map((e, c) => cell({ v: `E${e}`, sub: `槽位 ${r*2+c}`, e }) +
+        `<span class="tag ${e < 4 ? 'local">本卡' : 'remote">他卡'}</span>`).join('') + '</div>').join('') +
+      legend(ex8) },
+  { title: '默认模式：对全部 8 个全局专家计数、排序、补齐',
+    desc: 'cnt = [4, 3, 2, 0, 2, 2, 2, 1]，pad 后 = [4, 4, 4, 0, 4, 4, 4, 4]，总长 28 → 7 个块。注意：<b>所有 token 都参与对齐</b>，包括路由到他卡专家的。',
+    html: groupRow(g2, cnt2, pad2, N2, 'tiny') +
+      `<div class="note" style="font-family:monospace">cnt = [4, 3, 2, 0, 2, 2, 2, 1] → pad = [4, 4, 4, 0, 4, 4, 4, 4]，num_tokens_post_padded = 28</div>` + legend(ex8) },
+  { title: '切块完成：得到全局 expert_ids',
+    desc: '此时 expert_ids 还是全局专家号：[0, 1, 2, 4, 5, 6, 7]（E3 没有 token，不占块）。接下来返回前要做 expert_map 映射。',
+    html: blocksView(sorted2, geids2, N2, 4) +
+      `<div class="note" style="font-family:monospace">expert_ids（全局）= [0, 1, 2, 4, 5, 6, 7]</div>` + legend(ex8) },
+  { title: 'Rank 0：expert_ids 经 expert_map 映射，他卡专家的块标为 -1',
+    desc: '[0,1,2,4,5,6,7] → <b>[0, 1, 2, -1, -1, -1, -1]</b>。GEMM kernel 遇到 expert_id = -1 的块<b>整块跳过</b>，Rank 0 实际只计算前 3 个块。',
+    html: `<div class="note" style="margin:0 0 10px"><b>GPU 0</b>（持有 E0–E3）：</div>` + epBlocks(mids0) +
+      `<div class="note" style="font-family:monospace">expert_ids = [0, 1, 2, -1, -1, -1, -1]　→ 只算 3 块，4 块跳过</div>` + legend(ex8) },
+  { title: 'Rank 1：对称地，前 3 个块被跳过',
+    desc: '[0,1,2,4,5,6,7] → <b>[-1, -1, -1, 0, 1, 2, 3]</b>。Rank 1 只计算属于自己的 4 个块。两张卡合起来恰好覆盖全部 token 的所有专家计算。',
+    html: `<div class="note" style="margin:0 0 10px"><b>GPU 1</b>（持有 E4–E7）：</div>` + epBlocks(mids1) +
+      `<div class="note" style="font-family:monospace">expert_ids = [-1, -1, -1, 0, 1, 2, 3]　→ 只算 4 块</div>` + legend(ex8) },
+  { title: '可选：ignore_invalid_experts=True（过滤模式）',
+    desc: 'Rank 0 在计数阶段就忽略 E4–E7：它们的 token 不参与对齐（由 EP 通信层保证这些 token 会被送到对应卡）。缓冲从 28 缩到 12，只有 3 个块，expert_ids 里没有 -1。',
+    html: `<div class="note" style="margin:0 0 10px"><b>GPU 0</b> 只统计本卡专家 E0–E3：</div>` +
+      groupRow([g2[0],g2[1],g2[2]], [4,3,2], [4,4,4], N2, 'mid') +
+      blocksView([0,3,8,12, 1,4,10,16, 7,14,16,16], [0,1,2], N2, 4) +
+      `<div class="note" style="font-family:monospace">expert_ids = [0, 1, 2]　num_tokens_post_padded = 12（对比默认模式的 28）</div>` + legend([0,1,2,3]) }
+];
+
+/* ================= 场景三：batched（DP） ================= */
+const E3n = 5, MAXB = 8, SENT = 40;
+const ent = [2,3,0,6,8];
+const sorted3 = [0,1,40,40, 8,9,10,40, 24,25,26,27, 28,29,40,40, 32,33,34,35, 36,37,38,39];
+const eids3 = [0,1,3,3,4,4];
+const ex5 = [0,1,2,3,4];
+
+function bufferRows(showIdxOnEmpty) {
+  return ent.map((nt, e) => {
+    const cells = [];
+    for (let j = 0; j < MAXB; j++) {
+      const idx = e * MAXB + j;
+      cells.push(j < nt ? cell({ v: idx, e, size: 'tiny' })
+                        : cell({ v: showIdxOnEmpty ? idx : '', sub: '空', inv: 1, size: 'tiny' }));
+    }
+    return `<div class="rrow"><span class="tlabel">E${e} 排</span>${cells.join('')}` +
+           `<span class="seplab" style="color:${ec(e)}">${nt} 有效</span></div>`;
+  }).join('');
+}
+
+const steps3 = [
+  { title: '全局视角：DP + EP 下，token 要先「寄快递」',
+    desc: '多张 DP 卡各自拿着自己的 token（颜色 = 路由器选好的目标专家）。All-to-All Dispatch 负责把每个 token 寄到持有该专家的卡上，写进那块固定形状的缓冲。',
+    html: `<div class="flow">` +
+      [0,1,2].map(r => `<div class="dpcard"><b>DP 卡 ${r}</b><div class="toks">` +
+        [0,1,2,3,4].map(i => { const e = (r*3 + i*2) % 5; return `<span class="tok" style="background:${ec(e)}">${e}</span>`; }).join('') +
+        `</div></div>`).join('') +
+      `<div class="bigarrow">→<small>All-to-All<br>Dispatch</small></div>` +
+      `<div class="park"><b style="font-size:13px">专家卡上的固定缓冲（后面细看）</b>` +
+        [0,1,2,3,4].map(e => `<div class="rrow" style="margin:3px 0"><span class="tlabel" style="width:40px">E${e}</span>` +
+          '<span class="cell tiny empty"></span>'.repeat(8) + `</div>`).join('') +
+      `</div></div>` +
+      legend(ex5, `<span class="lg"><span class="sw" style="background:#fff;border-style:dashed;border-color:#aaa"></span>空车位</span>`) },
+  { title: '麻烦：每个专家每步收到几辆「车」是随机的',
+    desc: '第 n 步 E0 收 2 个、E1 收 3 个、E2 一个没有……第 n+1 步又变成另一组数字。如果按实际数量现分内存，张量形状步步都变。',
+    html: `<div class="rrow"><span class="tlabel">第 n 步</span>` +
+        ent.map((c, e) => `<span class="countchip" style="background:${ec(e)}">E${e}：${c} 个</span>`).join('') + `</div>` +
+      `<div class="rrow"><span class="tlabel">第 n+1 步</span>` +
+        [5,1,4,0,7].map((c, e) => `<span class="countchip" style="background:${ec(e)}">E${e}：${c} 个</span>`).join('') + `</div>` +
+      `<div class="note">形状步步变 → <b>CUDA Graph 无法捕获</b>（捕获要求所有张量形状恒定，否则得每次重新生成计算图，开销巨大）→ kernel 也没法针对定长做优化。</div>` },
+  { title: '对策：每个专家发一排「固定车位」，来几辆停几辆',
+    desc: 'hidden_states 形状恒为 (E × max_tokens_per_batch, K) = (5×8, K)，与负载无关。Dispatch 把 token 依次停进对应专家那排的最前面，空位就空着；expert_num_tokens[e] 记录 E排 实停几辆。形状固定 ✓ CUDA Graph 可以捕获 ✓',
+    html: `<div class="park">` +
+      [0,1,2,3,4].map(e => `<div class="rrow" style="margin:4px 0"><span class="tlabel" style="width:110px">E${e} 的固定车位（8 个）</span>` +
+        '<span class="cell tiny empty"></span>'.repeat(8) + `</div>`).join('') +
+      `</div>` +
+      `<div class="note">车位总数 40 个永远不变；变化的只有「停了几辆」。下面看本轮的停车情况。</div>` },
+  { title: '本轮停车情况：expert_num_tokens = [2, 3, 0, 6, 8]',
+    desc: '每排前几个车位停着有效 token（下标 = 专家号 × 8 + 车位号），其余是空位（深色）。E2 排一辆没来。注意关键点：<b>token 已经按专家分好排了</b>——分拣工作在 Dispatch 通信层就做完了。',
+    html: bufferRows(true) + legend(ex5, `<span class="lg"><span class="sw inv"></span>空车位（本轮无效）</span>`) },
+  { title: '对比基础版：从「先分拣再打包」变成「只打包」',
+    desc: '基础版 moe_align_block_size 拿到的是一锅乱序的槽位，必须先按专家排序才能对齐；batched 版的输入已经按专家分段，align 只需把每排有效数量凑成 block_size 的倍数——工作量小得多。',
+    html: `<div class="note" style="margin:0 0 4px"><b>基础版的输入</b>：乱序槽位 → 需要先「分拣（排序）」👇</div>` +
+      row(flat1.map((e, i) => cell({ v: i, sub: 'E' + e, e, size: 'tiny' }))) +
+      `<div class="note" style="margin:16px 0 4px"><b>batched 版的输入</b>：已按专家分排 → 只需「打包（凑整）」👇</div>` +
+      bufferRows(false) },
+  { title: '打包：逐排抄出有效 token，凑满 4 个一箱',
+    desc: '把每排的有效下标紧凑地抄进 sorted_token_ids，抄完一排就把写入位置向上凑整到 4 的倍数；凑不满的空位填哨兵值 40（= E × max_tokens_per_batch = 5×8，是个越界下标，kernel 遇到直接 mask）。E2 一辆没有，整排跳过、不占任何位置。',
+    html: [0,1,2,3,4].map(e => {
+      if (e === 2) return `<div class="rrow"><span class="tlabel">E2（0 辆）</span><span class="seplab">→ 整排跳过，不占段</span></div>`;
+      const starts = { 0: 0, 1: 4, 3: 8, 4: 16 }, ends = { 0: 4, 1: 8, 3: 16, 4: 24 };
+      return `<div class="rrow"><span class="tlabel">E${e}</span>` +
+        sorted3.slice(starts[e], ends[e]).map(v => v >= SENT ? cell({ v: '40', pad: 1, size: 'tiny' }) : cell({ v, e, size: 'tiny' })).join('') +
+        `<span class="seplab">${ent[e]} 辆 → 凑成 ${Math.ceil(ent[e]/4)*4} 个位置</span></div>`;
+    }).join('') +
+    `<div class="note" style="font-family:monospace">sorted_token_ids = [0,1,40,40 | 8,9,10,40 | 24,25,26,27, 28,29,40,40 | 32,33,34,35, 36,37,38,39]，其后全填 40</div>` +
+    legend(ex5, `<span class="lg"><span class="sw pad"></span>哨兵 40（被 mask）</span>`) },
+  { title: '装箱结果：6 箱有效 + expert_ids 逐箱标注',
+    desc: 'expert_ids = [0, 1, 3, 3, 4, 4]：E2 没有车所以专家号 2 直接跳过；E3 停了 6 辆，占 2 箱。缓冲总长 40 对应最多 10 个箱位，剩下 4 箱 expert_ids 填 -1，kernel 整箱跳过。num_tokens_post_padded = 24。',
+    html: blocksView(sorted3, eids3, SENT, 4) +
+      `<div class="bwrap" style="margin-top:6px">${[0,0,0,0].map(() => `<div class="bframe bskip"><div class="bslots">${[0,0,0,0].map(() => cell({ v: '40', pad: 1, size: 'tiny' })).join('')}</div><div class="blab">-1\n（空箱跳过）</div></div>`).join('')}</div>` +
+      `<div class="note" style="font-family:monospace">expert_ids = [0, 1, 3, 3, 4, 4, -1, -1, -1, -1]　　num_tokens_post_padded = 24</div>` + legend(ex5) },
+  { title: 'GEMM 怎么消费 + 这套设计妙在哪',
+    desc: 'kernel 读 num_tokens_post_padded=24 → 只起 6 个块；每块按 expert_ids 找对应专家的权重；哨兵行被 mask；-1 空箱整块跳过。<b>形状恒定</b>（缓冲永远 40 槽位、expert_ids 永远 10 箱位）所以 CUDA Graph 能捕获重放；<b>计算量可变</b>（本轮 6 块）所以不白算——两全其美。',
+    html: `<table style="margin:0">
+      <tr><th></th><th>基础版 moe_align_block_size</th><th>batched_moe_align_block_size</th></tr>
+      <tr><td><b>输入</b></td><td>topk_ids（逐 token 的路由结果，乱序）</td><td>expert_num_tokens（每排实停几辆）</td></tr>
+      <tr><td><b>token 谁分拣的</b></td><td>它自己：按专家排序聚拢</td><td>All-to-All Dispatch：发送时就按专家停好</td></tr>
+      <tr><td><b>它做什么</b></td><td>排序 + 按专家补齐到块倍数</td><td>只做补齐（拷贝 + 凑整）</td></tr>
+      <tr><td><b>输出长度</b></td><td>随路由分布变化（上界 numel + E×(bs−1)）</td><td>恒定：E × round_up(max_tokens_per_batch, bs)</td></tr>
+      <tr><td><b>哨兵值</b></td><td>numel（= num_tokens × top_k）</td><td>E × max_tokens_per_batch</td></tr>
+      <tr><td><b>典型场景</b></td><td>单卡 / 普通 TP 推理</td><td>DeepSeek 式 DP+EP、CUDA Graph 场景</td></tr>
+    </table>` }
+];
+
+makePlayer('p1', steps1);
+makePlayer('p2', steps2);
+makePlayer('p3', steps3);
+</script>
+</body>
+</html>

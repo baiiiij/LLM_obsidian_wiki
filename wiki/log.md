@@ -24,3 +24,16 @@
 5. 底层抽象层：SIMT / SIMD / SPMD 执行模型与指令集
 
 主线：从模型结构到硬件指令集，逐层向下打通。
+
+## [2026-07-30] ingest | vLLM moe_align_block_size 交互式详解
+
+首个来源。HTML 交互式讲解页，覆盖 `moe_align_block_size` 三场景（基础 / EP / DP batched）。
+
+**新建页面**：
+- 来源摘要：[[moe_align_block_size-交互式详解]]
+- 概念 ×6：[[MoE]]、[[moe_align_block_size]]、[[Grouped GEMM]]、[[专家并行 EP]]、[[数据并行 DP]]、[[CUDA Graph]]
+- 实体 ×3：[[vLLM]]、[[DeepSeek]]、[[Triton]]
+
+**关键知识点**：布局整理算子的作用与三段式实现；EP 的 expert_map 两种模式；DP 定长缓冲 ↔ CUDA Graph 定形约束；官方 docstring 笔误（expert_ids 正确结果为 [0,1,3,3,4,4]）。
+
+**值得深挖**：SGLang RadixAttention；FlashAttention；SIMT/SIMD/SPMD 辨析（底层抽象层尚空白）。
