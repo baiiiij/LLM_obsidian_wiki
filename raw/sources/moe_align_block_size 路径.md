@@ -277,6 +277,27 @@ return moe_align_block_size(
 - 只要 ≥5 个 token，或开了 EP → **必然调用 `moe_align_block_size`**
 - 结合 1.3 的序列并行：TP=8 时 32 token 被切成每卡 4 个，恰好触发捷径
 
+**naive 路径的下游执行与返回值语义**。
+
+`_prepare_expert_assignment` 在 naive 分支返回的三元组与 `moe_align_block_size` 形似而语义迥异，二者是同一份"生产者-消费者契约"的两种方言：
+
+| 返回值 | 对齐模式语义 | naive 模式语义 |
+|---|---|---|
+| `sorted_token_ids` | 槽位 → 对索引的间接查表 | `None`：对索引即 block 号，无需间接层 |
+| `expert_ids` | 每 BLOCK_M 槽位块一个专家（已排序） | 直接复用 `topk_ids.view(-1)`：每对（=每块）一个专家 |
+| `num_tokens_post_padded` | 有效槽位总数 | `numel × BLOCK_M`，编码"numel 个活跃块" |
+
+下游 grid 启动（`invoke_fused_moe_triton_kernel`, L769-782）：naive 时 `EM = numel × BLOCK_M`，`grid_m = numel`——**恰好一个 block 对应一个 (token, expert) 对**。kernel 以 constexpr `naive_block_assignment=True` 特化（L419-434）：
+
+```python
+offs_token = tl.where(offs == 0, pid_m, num_valid_tokens)  # 块号即对索引，其余 lane 越界被 mask
+off_experts = tl.load(expert_ids_ptr + pid_m)              # 展平 topk_ids 的第 pid_m 项
+```
+
+block `pid_m` 的第 0 条 lane 处理第 `pid_m` 个对，其余 `BLOCK_M-1` 条 lane 填越界值被 mask。两种模式共享同一份消费代码：`expert_ids[pid_m]` 查本块专家、`offs_token // top_k` 得 token 行号（展平 topk_ids 为 token-major，`pid_m // top_k` 即行号）、越界检查统一生效。设计精髓在于 **naive 模式把"对索引 = block 索引"做成恒等映射，整个砍掉了 `sorted_token_ids` 间接表**。
+
+naive 路径的收益与代价：收益是省掉 align kernel 的一次 launch 与设备同步、省掉排序与补位缓冲；代价是每个 BLOCK_M 宽的 tile 只有 1 行有效，浪费 `(BLOCK_M-1)/BLOCK_M` 的算力。启发式阈值 `tokens×top_k×4 ≤ E` 保证平均每个专家分到的对 ≤ 1/4——此时即使对齐也无法形成多样本块，浪费相同，故跳过预处理是纯收益。
+
 ### 3.4 分支⑥：EP 与否（`moe_align_block_size` 的两个语义）
 
 - `expert_map` 由 `determine_expert_map`（`layer.py` L71）在 EP>1 时生成：全局→本卡映射，非本卡为 -1

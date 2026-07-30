@@ -60,13 +60,40 @@ naive_block_assignment = (
 )
 ```
 
-若满足：返回 `sorted_token_ids=None`，走 `fused_moe_kernel` 的**低延迟路径**（整块直接按 topk_ids 查专家号，不做排序对齐）。
+若满足：跳过本 kernel，走 `fused_moe_kernel` 的**低延迟特化路径**。
 
 **对 Qwen3-30B-A3B（E=128, top-8）的推论**：仅当 `num_tokens ≤ 4` 且无 EP 时触发捷径。只要 ≥5 token 或开了 EP，**必然调用本 kernel**。
 
+### naive 返回值的"两种方言"
+
+naive 三元组与本 kernel 的输出形似而语义迥异，是同一份"生产者-消费者契约"的两种方言：
+
+| 返回值 | 对齐模式语义 | naive 模式语义 |
+|---|---|---|
+| `sorted_token_ids` | 槽位 → 对索引的间接查表 | `None`：对索引即 block 号，无需间接层 |
+| `expert_ids` | 每 BLOCK_M 槽位块一个专家（已排序） | 直接复用 `topk_ids.view(-1)`：每对（=每块）一个专家 |
+| `num_tokens_post_padded` | 有效槽位总数 | `numel × BLOCK_M`，编码"numel 个活跃块" |
+
+### 下游 kernel 特化（`fused_moe.py` L419-434, L769-782）
+
+- grid：naive 时 `EM = numel × BLOCK_M` → `grid_m = numel`，**一个 block 对应一个 (token, expert) 对**
+- kernel 以 constexpr `naive_block_assignment=True` 特化：
+  ```python
+  offs_token = tl.where(offs == 0, pid_m, num_valid_tokens)  # 块号即对索引，其余 lane 越界被 mask
+  off_experts = tl.load(expert_ids_ptr + pid_m)              # 展平 topk_ids 的第 pid_m 项
+  ```
+- 两种模式共享消费代码：`expert_ids[pid_m]` 查本块专家、`offs_token // top_k` 得 token 行号（展平 topk_ids 为 token-major）
+- **设计精髓**：naive 模式把"对索引 = block 索引"做成恒等映射，整个砍掉 `sorted_token_ids` 间接表
+
+### 收益与代价
+
+- **收益**：省掉 align kernel 的 launch + 设备同步；省掉排序与补位缓冲
+- **代价**：每个 BLOCK_M 宽 tile 只有 1 行有效，浪费 `(BLOCK_M-1)/BLOCK_M` 算力
+- **阈值的意义**：`tokens×top_k×4 ≤ E` 保证平均每专家 ≤ 1/4 对——此时对齐也无法形成多样本块，浪费相同，跳过预处理是纯收益
+
 ## 与序列并行的联动
 
-`sequence_parallel_chunk`（`models/utils.py` L815）在 router 前把 token 切成 tp_size 份 → 每卡 chunk 的 token 数变小。
+[[序列并行 SP]] 的 `sequence_parallel_chunk` 在 router 前把 token 切成 tp_size 份 → 每卡 chunk 的 token 数变小。
 
 - 例：TP=8、32 token → 每卡 4 个 → 恰好满足 `4 × 8 × 4 = 128 ≤ 128` → **触发 naive 捷径**
 - 启示：序列并行不仅节省计算/通信，还可能改变 kernel 路径选择

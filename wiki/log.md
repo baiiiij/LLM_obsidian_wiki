@@ -79,3 +79,14 @@
 - [[MoE]]：EPLB 扩展、SP 链接
 
 **勘误**：PCP = Prefill Context Parallel（此前误写为 Pipeline）。
+
+## [2026-07-30] ingest | naive 路径下游执行语义（增量）
+
+用户追问 naive_block_assignment 分支的下游走向与返回值差异，对照 `fused_moe_kernel` 源码补全。
+
+**更新页面**：
+- [[moe_align_block_size]]：naive 分支扩充——返回值"两种方言"对照表、kernel constexpr 特化（块=对恒等映射）、grid 启动差异、收益/代价与阈值意义
+- [[moe_align_block_size-代码路径]]（来源摘要）：同步 §3.3 增量
+- raw 文档 §3.3：补入下游执行分析（书面化）
+
+**关键知识点**：naive 模式 grid_m=numel（一块一对）；`offs_token=tl.where(offs==0, pid_m, num_valid)` 构造恒等映射砍掉 sorted_token_ids 间接表；阈值 tokens×top_k×4≤E 保证平均每专家≤1/4 对，对齐无收益。
