@@ -203,4 +203,17 @@ Qwen3MoeForCausalLM.forward
 | ⑦ | batched 变体 | DP+EP 部署 | 单卡不走 |
 
 ---
+
+# 附：问答记录（ingest 时一并整理）
+
+## Q1: `Qwen3MoeSparseMoeBlock.forward` 里的 `is_sequence_parallel` 分支是干什么的？
+
+**答**：这是 MoE 序列并行（Sequence Parallel MoE），由 `ParallelConfig.use_sequence_parallel_moe` 开启（配 TP>1）。
+
+- **作用**：`sequence_parallel_chunk`（`models/utils.py` L815）沿 token 维把 hidden_states 均切成 tp_size 份（不能整除先 padding），每卡只处理自己那 1/tp；算完专家后 `tensor_model_parallel_all_gather(dim 0)` 拼回完整序列，再 `[:num_tokens]` 裁掉 padding
+- **动机**：TP 下 attention 后 hidden_states 是各卡完全相同的副本，gate 又是 ReplicatedLinear → 不切分则每卡对全部 token 重复算路由；SP 让每卡只路由 + 只 GEMM 自己的 chunk，同时 w2 的 all-reduce 也只在 chunk 上进行，通信量从 ~2S 降到 ~2S/tp + S
+- **实现细节**：包成 custom op（`torch.ops.vllm.sequence_parallel_chunk_impl`）因为小 batch 输出长度可能为 0，torch.compile/CUDA Graph 下会出问题，故提供 fake impl
+- **与分支⑤的联动**：切分发生在 router 之前 → moe_align_block_size 看到的 num_tokens 是**每卡切分后**的值；如 TP=8、32 token → 每卡 4 个，恰好触发 naive 捷径跳过对齐 kernel
+
+---
 *本文档由用户开题、Claudian 对照 v0.20.2 源码（commit bc150f5）补充整理，待用户确认后 ingest。*
