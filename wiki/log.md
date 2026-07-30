@@ -37,3 +37,26 @@
 **关键知识点**：布局整理算子的作用与三段式实现；EP 的 expert_map 两种模式；DP 定长缓冲 ↔ CUDA Graph 定形约束；官方 docstring 笔误（expert_ids 正确结果为 [0,1,3,3,4,4]）。
 
 **值得深挖**：SGLang RadixAttention；FlashAttention；SIMT/SIMD/SPMD 辨析（底层抽象层尚空白）。
+
+## [2026-07-30] ingest | vLLM moe_align_block_size 代码路径（含 5 轮问答）
+
+第二个来源。用户自建文档，由 Claudian 对照 v0.20.2 源码补充整理，含 5 轮问答。
+
+**新建页面**：
+- 来源摘要：[[moe_align_block_size-代码路径]]
+- 概念 ×2：[[Shared Experts]]、[[Latent MoE]]
+
+**更新页面**（大幅扩充）：
+- [[vLLM]]：补充 v0.20.2 runner 架构、TP/SP/EP/DP 通信节奏、naive 捷径与序列并行联动
+- [[MoE]]：补充 Shared/Latent/序列并行扩展
+- [[moe_align_block_size]]：补充完整调用链位置、naive_block_assignment 分支、与 SP 联动
+- [[专家并行 EP]]：补充 naive dispatch 前置通信
+- [[数据并行 DP]]：补充 PCP 关联
+
+**关键知识点**：
+- v0.20.2 架构重构：FusedMoE → MoERunner → 模块化 kernel（oracle 选后端）
+- naive 捷径：`num_tokens × top_k × 4 ≤ E` 时跳过对齐；Qwen3-30B-A3B 仅 ≤4 token 触发
+- 序列并行联动：TP=8 时 32 token → 每卡 4 个 → 恰好触发捷径
+- ReplicatedLinear 的必要性：gate 必须每卡完全复制，否则路由分叉
+- shared_experts / latent MoE 的模型架构来源与 vLLM 支持方式
+- `_maybe_dispatch` / `_maybe_combine` 的通信节奏（DP/EP All-to-All + PCP all-gather/reduce-scatter）

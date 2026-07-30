@@ -215,5 +215,37 @@ Qwen3MoeForCausalLM.forward
 - **实现细节**：包成 custom op（`torch.ops.vllm.sequence_parallel_chunk_impl`）因为小 batch 输出长度可能为 0，torch.compile/CUDA Graph 下会出问题，故提供 fake impl
 - **与分支⑤的联动**：切分发生在 router 之前 → moe_align_block_size 看到的 num_tokens 是**每卡切分后**的值；如 TP=8、32 token → 每卡 4 个，恰好触发 naive 捷径跳过对齐 kernel
 
+## Q2: ReplicatedLinear（每卡一份完整复制）是什么概念？
+
+**答**：vLLM 里的"复制型线性层"（`linear.py` L289），每卡持有完整权重副本（非切分）。
+
+- **为什么 gate 必须是 ReplicatedLinear**：路由决策（`topk_ids`）必须全局一致，若 gate 是 ColumnParallel，每卡只看部分特征 → logits 不同 → token 被发往不同专家 → 结果错乱。ReplicatedLinear 用计算冗余换一致性，无需通信即可达成共识
+- 代价：每卡重复跑完整 gate GEMM；序列并行（SP-MoE）的意义之一就是砍掉这份冗余
+
+## Q3: `apply_routed_input_transform` 注释里的 latent MoE 是什么？
+
+**答**：**Latent MoE = 路由前先投影到更低维的潜空间**。
+
+- `apply_routed_input_transform`（`moe_runner.py` L284）若配置了 `routed_input_transform`（降维线性层），会把 hidden_states 投影到 latent_size < hidden_dim → gate + expert GEMM 的计算量/内存减少 → 算完后再 `apply_routed_output_transform` 升维回原始尺寸
+- 类似 AutoEncoder bottleneck 思想；Qwen3-30B-A3B 没有降维配置，此分支为恒等
+
+## Q4: `_maybe_pad_hidden_states` 的 padding 条件是什么？shared_experts 又是什么概念？
+
+**答**：
+- **padding 作用**：`transformed_hidden_dim`（经过 latent transform 后）可能小于 `moe_config.hidden_dim`，而 fused kernel 的 workspace/weight 按 hidden_dim 对齐。条件 `skip_forward_padding == False and 两维不等` 时补零，kernel 跑完后再裁掉
+- **shared_experts**：模型架构自带概念（Mixtral、Qwen1.5-MoE 等），在 routed sparse 专家外再配一个"所有 token 都跑"的密集专家（类似标准 FFN），分担通用知识。vLLM 的 `FusedMoE` / `MoERunner` 通过 `shared_experts_input` 接入，可串行也可开独立 CUDA stream 并行重叠
+- **Qwen3-30B-A3B**：`shared_expert_intermediate_size = 0`（`qwen3_moe.py` L187-209）→ **无 shared expert**
+
+## Q5: `_forward_impl` 里的 `_maybe_dispatch` 有哪些条件分支？
+
+**答**：`_maybe_dispatch`（`moe_runner.py` L661）在 kernel 前做通信前置，两条分支：
+
+| 分支 | 条件 | 行为 | Qwen3-30B-A3B |
+|---|---|---|---|
+| A. naive DP/EP dispatch | `dp_size>1 and not supports_internal_mk` | `get_ep_group().dispatch_router_logits(...)` 做 All-to-All 发 token | 单卡 `dp_size=1` → **不走** |
+| B. Pipeline Context Parallel (PCP) | `pcp_size>1` | `get_pcp_group().all_gather(dim=0)` 拼序列长度 | 单卡 `pcp_size=1` → **不走** |
+
+完整通信节奏：`_maybe_dispatch`（前置）→ `_apply_quant_method`（计算）→ `_maybe_combine`（后置收结果）。对单卡无量化场景，前后通信都是恒等映射。
+
 ---
 *本文档由用户开题、Claudian 对照 v0.20.2 源码（commit bc150f5）补充整理，待用户确认后 ingest。*

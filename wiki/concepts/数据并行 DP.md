@@ -3,7 +3,7 @@ type: concept
 title: 数据并行（DP, Data Parallelism）
 created: 2026-07-30
 updated: 2026-07-30
-sources: ["raw/sources/moe_align_block_size交互讲解.html"]
+sources: ["raw/sources/moe_align_block_size交互讲解.html", "raw/sources/moe_align_block_size 路径.md"]
 tags: [moe, 并行, dp, 框架层]
 ---
 
@@ -33,6 +33,10 @@ tags: [moe, 并行, dp, 框架层]
 - `batched_moe_align_block_size`：token 已被通信层按专家分好段，**无需排序**，只负责"打包"（向上补齐到 block_size 整数倍），输出语义与基础版 [[moe_align_block_size]] 相同
 
 类比：每个专家有一排固定车位，token 是车，GEMM 按 block_size 辆一卡车拉走。
+
+## PCP（Pipeline Context Parallel）的关联
+
+v0.20.2 的 `_maybe_dispatch` 里还有一条分支：`pcp_size > 1` 时通过 `get_pcp_group().all_gather(dim=0)` 把按序列长度切分的片段拼成完整序列，让 MoE 层能看到全部 token 做路由。算完后 `reduce_scatter` 再切开。这是**与 DP 不同维度**的并行策略。
 
 ## 参见
 

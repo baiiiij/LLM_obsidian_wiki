@@ -11,35 +11,38 @@ updated: 2026-07-30
 ## 当前状态
 
 - 目标与范围：见 [[purpose]]（LLM 算子开发，五层结构）
-- 来源数量：1
-- 页面数量：10（3 实体 + 6 概念 + 1 来源摘要）
+- 来源数量：2
+- 页面数量：14（3 实体 + 8 概念 + 2 来源摘要 + 1 索引 + 1 本页）
 
 ## 主题地图
 
-当前知识集中在一条纵向链路上（模型层 → 框架层 → 算子层）：
+### 纵向链路（模型层 → 框架层 → 算子层）
 
 ```
-MoE（模型结构）
-  └─ 路由输出散乱 → moe_align_block_size（算子：布局整理）
-       └─ Grouped GEMM（算子：核心计算，Triton 实现）
-  └─ 部署：EP（专家切卡）+ DP（token 切卡 + All-to-All）
-       └─ 动态形状 ↔ CUDA Graph 定形约束 → 定长缓冲方案
+MoE（模型结构：路由 + top-k 稀疏激活）
+  ├─ Shared Experts（dense 辅助专家）
+  ├─ Latent MoE（降维-升维投影）
+  └─ 序列并行（TP 下 token 切分）
+       └─ moe_align_block_size（算子：布局整理）
+            ├─ naive 捷径分支（tokens≤4 时跳过）
+            └─ Grouped GEMM（算子：核心计算，Triton 实现）
+       └─ 专家并行 EP（专家切卡）+ 数据并行 DP（token 切卡 + All-to-All）
+            └─ CUDA Graph 定形约束 → 定长缓冲方案
 ```
 
-核心实体：[[vLLM]]（框架）、[[DeepSeek]]（模型）、[[Triton]]（算子语言）。
-
-## 已覆盖 vs 空白
+### 已覆盖 vs 空白
 
 | 层次 | 状态 |
 |---|---|
-| 1. 模型层 | 有 [[MoE]] 入口页，缺具体模型结构细节 |
-| 2. 框架层 | vLLM MoE 路径已有基础；PagedAttention/调度器空白 |
-| 3. 算子层 | 1 个具体算子 + Grouped GEMM + Triton 入口 |
+| 1. 模型层 | MoE 入口页，含 Shared/Latent/SP 扩展；缺具体模型结构细节（如 MLA、GQA） |
+| 2. 框架层 | vLLM MoE 路径已有深度（v0.20.2 runner + 模块化 kernel）；PagedAttention/调度器空白 |
+| 3. 算子层 | 2 个具体算子（moe_align + Grouped GEMM）+ Triton 入口；FlashAttention 空白 |
 | 4. 硬件层 | 空白 |
 | 5. 底层抽象层 | 空白（SIMT/SIMD/SPMD 尚无页面） |
 
 ## 建议的深挖方向
 
-- SGLang 的 RadixAttention（框架层横向对比）
-- FlashAttention 类算子（算子层最经典案例）
-- SIMT vs SIMD vs SPMD 辨析（底层抽象层打地基）
+1. **FlashAttention / FlashDecoding**：算子层最经典的 kernel 案例，与 moe_align_block_size 形成对比
+2. **SGLang RadixAttention**：框架层横向对比 vLLM 的调度思想
+3. **SIMT vs SIMD vs SPMD**：底层抽象层打地基，影响 Triton block 编程模型
+4. **Triton 编译模型与 TileLang 对比**：算子语言层的核心关注点

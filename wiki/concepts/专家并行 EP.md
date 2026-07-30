@@ -3,7 +3,7 @@ type: concept
 title: 专家并行（EP, Expert Parallelism）
 created: 2026-07-30
 updated: 2026-07-30
-sources: ["raw/sources/moe_align_block_size交互讲解.html"]
+sources: ["raw/sources/moe_align_block_size交互讲解.html", "raw/sources/moe_align_block_size 路径.md"]
 tags: [moe, 并行, ep, 框架层]
 ---
 
@@ -27,6 +27,14 @@ EP 下该 kernel 的用法变化：
 |---|---|---|
 | 默认（`ignore_invalid_experts=False`） | 全部全局专家参与计数/排序/补齐，返回前映射，非本卡块标 -1 | 布局全局一致；MoE GEMM 遇 -1 整块跳过 |
 | 过滤（`ignore_invalid_experts=True`） | 计数阶段直接忽略非本卡专家 | 缓冲更小，`expert_ids` 无 -1 |
+
+## vLLM 中的前置通信（来源 2）
+
+在多卡 DP/EP 场景下，`_maybe_dispatch`（`moe_runner.py` L661）在 kernel 前通过 `get_ep_group().dispatch_router_logits(...)` 做 **All-to-All**，把 token 和 router logits 发到目标卡。算完后 `_maybe_combine` 做反向 All-to-All 收回结果。
+
+条件：`dp_size > 1 and not quant_method.supports_internal_mk`。
+
+单卡场景：不走通信，为恒等映射。
 
 ## 与 DP 的组合
 
