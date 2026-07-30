@@ -30,11 +30,15 @@ EP 下该 kernel 的用法变化：
 
 ## vLLM 中的前置通信（来源 2）
 
-在多卡 DP/EP 场景下，`_maybe_dispatch`（`moe_runner.py` L661）在 kernel 前通过 `get_ep_group().dispatch_router_logits(...)` 做 **All-to-All**，把 token 和 router logits 发到目标卡。算完后 `_maybe_combine` 做反向 All-to-All 收回结果。
+在多卡 DP/EP 场景下，`_maybe_dispatch`（`moe_runner.py` L661）在 kernel 前通过 `get_ep_group().dispatch_router_logits(...)` 做 [[All-to-All]]，把 token 和 router logits 发到目标卡。算完后 `_maybe_combine` 做反向 All-to-All 收回结果。
 
-条件：`dp_size > 1 and not quant_method.supports_internal_mk`。
+条件：`dp_size > 1 and not quant_method.supports_internal_mk`（通信未内置进 kernel 时 runner 外挂执行）。
 
 单卡场景：不走通信，为恒等映射。
+
+## 负载均衡
+
+EP 的静态分卡 + 动态路由会导致热点专家挤爆单卡 → vLLM 提供 [[EPLB]]（冗余专家 + 逻辑/物理双层 ID + 后台重平衡）。
 
 ## 与 DP 的组合
 
@@ -42,4 +46,4 @@ EP 常与 [[数据并行 DP]] 组合部署（典型：[[DeepSeek]] 系列），�
 
 ## 参见
 
-- [[MoE]]、[[数据并行 DP]]、[[moe_align_block_size]]、[[vLLM]]
+- [[MoE]]、[[数据并行 DP]]、[[moe_align_block_size]]、[[vLLM]]、[[EPLB]]、[[All-to-All]]

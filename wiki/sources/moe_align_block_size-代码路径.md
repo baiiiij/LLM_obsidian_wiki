@@ -9,44 +9,33 @@ tags: [vllm, moe, kernel, ep, dp, triton, 代码分析]
 
 # vLLM moe_align_block_size 代码分支路径
 
-> 来源摘要页。原始文件：`raw/sources/moe_align_block_size 路径.md`（含主文档 + 5 轮问答记录）。
+> 来源摘要页。原始文件：`raw/sources/moe_align_block_size 路径.md`（经多轮问答打磨后的定稿，五章 + 12 项分支决策表）。
 
 ## 一句话概括
 
-以 Qwen3-30B-A3B 为例，完整追踪从 `Qwen3MoeForCausalLM.forward` 到 `moe_align_block_size` CUDA kernel 的**外部（模型层）+ 内部（框架层）代码分支**，并分析每个分叉点的触发条件与对算子的影响。
+以 Qwen3-30B-A3B 为例，完整追踪从 `Qwen3MoeForCausalLM.forward` 到 `moe_align_block_size` CUDA kernel 的**外部（模型层）→ runner → method → modular kernel → TritonExperts → align kernel** 全链路分支，并覆盖并行策略（TP/SP/EP/DP/PCP）、负载均衡（EPLB）、通信原语等周边知识。
 
-## 七层调用链（GPU / 单卡无量化 / ≥5 token）
+## 文档结构（五章）
 
-```
-Qwen3MoeForCausalLM.forward (qwen3_moe.py:764)
-└─ Qwen3MoeModel.forward
-   └─ Qwen3MoeDecoderLayer.forward (L416) ×48
-      └─ Qwen3MoeSparseMoeBlock.forward (L226)
-         ├─ [分支①] MoE vs Dense（num_experts>0 & decoder_sparse_step）→ MoE
-         ├─ [分支②] router 内外（is_internal_router=True）→ 内部
-         └─ FusedMoE.forward (layer.py:1545)
-            └─ MoERunner.forward (moe_runner.py:567)
-               └─ custom op _moe_forward → _forward_impl (L717)
-                  ├─ [分支③] monolithic?（仅 CPU）→ False
-                  ├─ router.select_experts → topk_weights/topk_ids
-                  └─ UnquantizedFusedMoEMethod.apply → moe_kernel.apply
-                     └─ TritonExperts.apply (fused_moe.py:1985)
-                        └─ _prepare_expert_assignment (L1554)
-                           ├─ [分支⑤] naive 捷径?（tokens≤4 且无 EP）→ 跳过对齐
-                           └─ moe_align_block_size (moe_align_block_size.py:11)
-                              └─ ops.moe_align_block_size (CUDA)
-```
+1. **外部路径（模型定义层）**：MoE/Dense 分支；TP 背景（attention all-reduce、ReplicatedLinear）；序列并行分支；router 内外分支
+2. **内部路径（框架层）**：FusedMoE→MoERunner 委托；Latent MoE 与 padding；shared experts；monolithic vs modular；`_maybe_dispatch`/`_maybe_combine` 通信前置；后端 oracle；EPLB 映射
+3. **模块化 kernel 内部**：ModularImpl 调用链 6 分支（inplace/async/DBO/空批次/finalize/shared 重叠）；TritonExperts.apply；naive 捷径；EP 语义；batched 变体；align kernel 本体
+4. **完整调用链一图流**
+5. **分支决策总表（12 项）**
 
-## 关键发现
+## 核心知识点
 
-- **0.20.2 大重构**：FusedMoE 本体变壳，逻辑全部委托给 `MoERunner`；无量化后端走**模块化 kernel**（`FusedMoEKernel` = prepare_finalize + TritonExperts），由 `oracle/unquantized.py` 自动选后端
-- **naive_block_assignment 捷径**（v0.20.2 新增）：当 `expert_map is None` 且 `num_tokens × top_k × 4 ≤ global_num_experts` 时，跳过 `moe_align_block_size`，走 kernel 内低延迟路径。对 Qwen3-30B-A3B（E=128, top-8）→ **仅 ≤4 token 时触发**
-- **序列并行联动**：`sequence_parallel_chunk` 在 router 前切分 token → `moe_align_block_size` 看到的 `num_tokens` 是每卡 chunk。TP=8 时 32 token → 每卡 4 个 → 恰好触发 naive 捷径
-- **shared_experts / latent MoE**：模型架构级概念（Qwen3-30B-A3B 无 shared expert、无 latent 投影），vLLM 通过 `FusedMoE` / `MoERunner` 统一支持
-- **通信节奏**：`_maybe_dispatch`（前置）→ kernel → `_maybe_combine`（后置）；单卡场景均为恒等映射
+- **v0.20.2 大重构**：`FusedMoE` 变壳 → `MoERunner`；无量化走模块化 kernel（`FusedMoEKernel = prepare_finalize + experts`），后端由 oracle 选择（CUDA 默认 TritonExperts）
+- **monolithic vs modular 的本质**：输入是 `router_logits`（kernel 内路由）还是 `topk_ids/weights`（外部先路由）；method 层 monolithic 仅 CPU，MK 层还有 FlashInfer 类
+- **`supports_internal_mk`**：通信从"runner 外挂"迁移到"kernel 内置"的过渡开关
+- **naive_block_assignment 捷径**：无 EP 且 `tokens×top_k×4 ≤ E` 时跳过对齐；Qwen3-30B-A3B（E=128, top-8）仅 ≤4 token 触发
+- **序列并行联动**：TP=8 时 32 token → 每卡 4 个 → 恰好触发捷径
+- **EPLB**：逻辑/物理专家双层 ID；路由后映射 + 负载记录的融合 Triton kernel；后台 async rebalance
+- **通信节奏**：`_maybe_dispatch`（naive DP/EP all2all；PCP all-gather）→ kernel → `_maybe_combine`
+- **ReplicatedLinear 的必要性**：gate 必须每卡完全复制，否则各卡路由分叉
 
 ## 关联页面
 
 - 算子：[[moe_align_block_size]]、[[Grouped GEMM]]
-- 概念：[[MoE]]、[[专家并行 EP]]、[[数据并行 DP]]、[[CUDA Graph]]、[[Shared Experts]]、[[Latent MoE]]
+- 概念：[[MoE]]、[[专家并行 EP]]、[[数据并行 DP]]、[[CUDA Graph]]、[[Shared Experts]]、[[Latent MoE]]、[[序列并行 SP]]、[[EPLB]]、[[All-to-All]]、[[Context Parallel]]
 - 实体：[[vLLM]]、[[DeepSeek]]、[[Triton]]

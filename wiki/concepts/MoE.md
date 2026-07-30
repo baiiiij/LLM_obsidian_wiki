@@ -41,7 +41,12 @@ MoE 的结构直接塑造了底层算子的形态：
 ### 序列并行（Sequence Parallel MoE）
 
 TP 下 attention 后 hidden_states 是各卡完全相同的副本。序列并行在 router 前把 token 均切成 tp_size 份，每卡只路由 + GEMM 自己的 chunk，最后 all-gather 拼回。节省路由冗余计算和 all-reduce 通信量。
-→ 与 [[moe_align_block_size]] 联动：切分后的 chunk token 数可能小到触发 naive 捷径
+→ 详见 [[序列并行 SP]]；与 [[moe_align_block_size]] 联动：切分后的 chunk token 数可能小到触发 naive 捷径
+
+### 负载均衡（EPLB）
+
+EP 部署下热点专家挤爆单卡 → 冗余专家副本 + 逻辑/物理双层 ID 映射 + 后台重平衡。
+→ 详见 [[EPLB]]
 
 ## 典型代表
 
@@ -49,4 +54,4 @@ TP 下 attention 后 hidden_states 是各卡完全相同的副本。序列并行
 
 ## 参见
 
-- [[moe_align_block_size]]、[[Grouped GEMM]]、[[专家并行 EP]]、[[数据并行 DP]]、[[Shared Experts]]、[[Latent MoE]]
+- [[moe_align_block_size]]、[[Grouped GEMM]]、[[专家并行 EP]]、[[数据并行 DP]]、[[Shared Experts]]、[[Latent MoE]]、[[序列并行 SP]]、[[EPLB]]

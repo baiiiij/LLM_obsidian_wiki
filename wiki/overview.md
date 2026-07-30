@@ -12,7 +12,7 @@ updated: 2026-07-30
 
 - 目标与范围：见 [[purpose]]（LLM 算子开发，五层结构）
 - 来源数量：2
-- 页面数量：14（3 实体 + 8 概念 + 2 来源摘要 + 1 索引 + 1 本页）
+- 页面数量：18（3 实体 + 12 概念 + 2 来源摘要 + 1 索引 + 1 本页）
 
 ## 主题地图
 
@@ -22,12 +22,14 @@ updated: 2026-07-30
 MoE（模型结构：路由 + top-k 稀疏激活）
   ├─ Shared Experts（dense 辅助专家）
   ├─ Latent MoE（降维-升维投影）
-  └─ 序列并行（TP 下 token 切分）
-       └─ moe_align_block_size（算子：布局整理）
-            ├─ naive 捷径分支（tokens≤4 时跳过）
-            └─ Grouped GEMM（算子：核心计算，Triton 实现）
-       └─ 专家并行 EP（专家切卡）+ 数据并行 DP（token 切卡 + All-to-All）
-            └─ CUDA Graph 定形约束 → 定长缓冲方案
+  ├─ 序列并行 SP（TP 下 token 切分）
+  ├─ EPLB（EP 负载均衡：逻辑/物理双层 ID）
+  └─ moe_align_block_size（算子：布局整理）
+       ├─ naive 捷径分支（tokens≤4 时跳过）
+       └─ Grouped GEMM（算子：核心计算，Triton 实现）
+  └─ 并行策略网：EP（专家切卡）+ DP（token 切卡）+ PCP（序列切段）
+       ├─ 通信原语：All-Reduce / All-Gather / Reduce-Scatter / All-to-All
+       └─ CUDA Graph 定形约束 → 定长缓冲方案
 ```
 
 ### 已覆盖 vs 空白

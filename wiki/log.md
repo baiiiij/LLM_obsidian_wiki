@@ -60,3 +60,22 @@
 - ReplicatedLinear 的必要性：gate 必须每卡完全复制，否则路由分叉
 - shared_experts / latent MoE 的模型架构来源与 vLLM 支持方式
 - `_maybe_dispatch` / `_maybe_combine` 的通信节奏（DP/EP All-to-All + PCP all-gather/reduce-scatter）
+
+## [2026-07-30] ingest | 代码路径文档定稿（问答融入章节）+ 新增概念页
+
+用户要求将 raw 文档的 11 轮问答书面化融入章节，形成五章定稿（外部路径 / 框架层 / MK 内部 / 一图流 / 12 项决策表）。
+
+**新建概念页 ×4**：
+- [[EPLB]] — 专家并行负载均衡：冗余专家、逻辑/物理双层 ID、映射+负载记录融合 kernel、后台 rebalance
+- [[All-to-All]] — 四种集合通信原语对比；EP dispatch/combine 的本质；all2all 后端生态
+- [[Context Parallel]] — PCP/DCP 之分；MoE 层的 AgRsAll2All 临时方案
+- [[序列并行 SP]] — 消除 TP 下 gate 冗余；与 naive 捷径的联动
+
+**更新页面**：
+- [[vLLM]]：MK 两种 impl、monolithic vs modular 本质、supports_internal_mk 语义、EPLB 支持
+- [[moe_align_block_size-代码路径]]（来源摘要）：同步定稿结构与核心知识点
+- [[专家并行 EP]]：EPLB 链接、All-to-All 链接
+- [[数据并行 DP]]：PCP 改为 Prefill Context Parallel（勘误），链接 [[Context Parallel]]
+- [[MoE]]：EPLB 扩展、SP 链接
+
+**勘误**：PCP = Prefill Context Parallel（此前误写为 Pipeline）。

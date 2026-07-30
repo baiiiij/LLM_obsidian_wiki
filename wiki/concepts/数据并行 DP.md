@@ -34,10 +34,11 @@ tags: [moe, 并行, dp, 框架层]
 
 类比：每个专家有一排固定车位，token 是车，GEMM 按 block_size 辆一卡车拉走。
 
-## PCP（Pipeline Context Parallel）的关联
+## PCP（Prefill Context Parallel）的关联
 
 v0.20.2 的 `_maybe_dispatch` 里还有一条分支：`pcp_size > 1` 时通过 `get_pcp_group().all_gather(dim=0)` 把按序列长度切分的片段拼成完整序列，让 MoE 层能看到全部 token 做路由。算完后 `reduce_scatter` 再切开。这是**与 DP 不同维度**的并行策略。
+→ 详见 [[Context Parallel]]
 
 ## 参见
 
-- [[MoE]]、[[专家并行 EP]]、[[CUDA Graph]]、[[moe_align_block_size]]
+- [[MoE]]、[[专家并行 EP]]、[[CUDA Graph]]、[[moe_align_block_size]]、[[All-to-All]]、[[Context Parallel]]
