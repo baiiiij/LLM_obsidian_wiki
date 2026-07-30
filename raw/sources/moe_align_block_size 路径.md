@@ -243,9 +243,70 @@ Qwen3MoeForCausalLM.forward
 | 分支 | 条件 | 行为 | Qwen3-30B-A3B |
 |---|---|---|---|
 | A. naive DP/EP dispatch | `dp_size>1 and not supports_internal_mk` | `get_ep_group().dispatch_router_logits(...)` 做 All-to-All 发 token | 单卡 `dp_size=1` → **不走** |
-| B. Pipeline Context Parallel (PCP) | `pcp_size>1` | `get_pcp_group().all_gather(dim=0)` 拼序列长度 | 单卡 `pcp_size=1` → **不走** |
+| B. Prefill Context Parallel (PCP) | `pcp_size>1` | `get_pcp_group().all_gather(dim=0)` 拼序列长度 | 单卡 `pcp_size=1` → **不走** |
 
 完整通信节奏：`_maybe_dispatch`（前置）→ `_apply_quant_method`（计算）→ `_maybe_combine`（后置收结果）。对单卡无量化场景，前后通信都是恒等映射。
+
+## Q6: `supports_internal_mk`、量化后端、combine、"封装进 modular kernel" 分别是什么概念？
+
+**答**：
+- **量化后端（quant_method）**：每种量化方式（FP8/INT8/GPTQ/无量化…）实现为一个 `FusedMoEMethodBase` 子类，负责建权重 + 执行 MoE 计算
+- **dispatch / combine**：DP+EP 下 kernel 前把 token 发给专家所在卡（dispatch），kernel 后收回结果（combine），是一对通信操作
+- **Modular Kernel（MK）**：0.20.x 新架构，`FusedMoEKernel = prepare_finalize（通信+量化预处理+归并）+ fused_experts（纯 GEMM）`；不同通信后端 = 不同 prepare_finalize 实现（`no_dp_ep`/`naive_dp_ep`/`deepep_ht`/`deepep_ll`/`flashinfer_nvlink_*`/`nixl_ep`/`mori`）
+- **`supports_internal_mk`**（`method_base.py` L34）：`self.moe_kernel is not None` 即 True，表示 dispatch/combine 已由 prepare_finalize 在 kernel 内部完成；为 False 时 runner 只能在外层手动做（"naive"方式）。这是通信从"runner 外挂"迁移到"kernel 内置"的过渡期开关
+
+## Q7: All-to-All 是什么概念？
+
+**答**：集合通信原语：组内每卡把数据切成 N 份，第 i 份发给第 i 张卡，同时从每卡各收一份。对比：All-Reduce（收归约结果，TP 用）、All-Gather（收全量拼接，SP 用）、Reduce-Scatter（归约+切分）。EP 的 dispatch/combine 天然是 all-to-all（token 按目标专家路由到对应卡），是 MoE EP 部署的主要通信开销——这就是 vLLM 有众多 all2all 后端（DeepEP/NVLink/NIXL…）专门优化它的原因。
+
+## Q8: PCP（Prefill Context Parallel）详解 —— 含勘误
+
+**答**：⚠️ 勘误：PCP = **Prefill Context Parallel**（非 Pipeline），`parallel_state.py` L1281 明确。
+
+- **Context Parallel**：超长序列沿 token 维切段，每卡处理一段，分摊 attention 的 KV 内存与计算
+- vLLM 区分 **PCP（prefill 阶段）** 与 **DCP（decode 阶段）**，因两阶段计算/访存特征不同
+- MoE 层遇 PCP：vLLM 选择最简单的 **AgRsAll2All** 方案——kernel 前 `all_gather(dim=0)` 拼回完整序列，kernel 后 `reduce_scatter` 切回各段。源码注释明确说是临时简单实现，未来将重构进 All2AllManager
+
+## Q9: `apply_monolithic` 的概念、原理、内部算子、为何仅 CPU？
+
+**答**：
+- **monolithic vs modular 的本质区别在输入**：monolithic 吃 `router_logits`（路由在 kernel 内部做），路由+专家+归并揉成一团；modular 吃 `topk_ids/topk_weights`（外部先路由），prepare→experts→finalize 三段拆
+- **内部算子**（CPU 路径）：`cpu_fused_moe.CPUFusedMOE`，一个类内完成 softmax→topk→逐专家 GEMM→加权求和（x86 可选 SGL kernel）
+- **为何仅 CPU**：GPU 后端已全部迁移模块化；CPU 无跨卡 all-to-all（单节点），不需要 prepare/finalize 拆分，旧一体实现更简单高效（`unquantized_fused_moe_method.py` L53-57 注释 "Escape hatch for CPU"）
+- **易混淆点**：MK 层还有 `FusedMoEKernelMonolithicImpl`（`modular_kernel.py` L1420），用于 FlashInfer TRTLLM 这类"路由+专家融合"的 GPU kernel。完整说法：**method 层 monolithic 仅 CPU；MK 层 monolithic 还有 FlashInfer 类 GPU 融合 kernel**
+
+## Q10: `_apply_eplb_mapping` 分支（EPLB）是干什么的？
+
+**答**：**EPLB = Expert Parallelism Load Balancer**（专家并行负载均衡）。
+
+- **问题**：EP 下专家静态分卡，路由却是动态的——热点专家挤爆某卡，冷门闲置
+- **思路**：冗余专家（物理专家数 = 逻辑数 + 冗余数），热点逻辑专家在多卡摆副本 → 引入两层 ID：逻辑 ID（router 输出）↔ 物理 ID（实际调度）
+- **该分支做的事**：`enable_eplb` 时把 topk_ids 从逻辑 ID 翻译成物理 ID，同时**记录每个物理专家的 token 负载**（`expert_load_view`，供后台重平衡决策用）；不开则恒等
+- **实现**：融合 Triton kernel（`router/base_router.py` L111），一次 pass 完成映射+计数；`should_record_tensor` 控制是否记录（避免预热污染统计）；后台 `eplb/async_worker.py` 定期按负载重摆副本（`rebalance_execute.py`）
+
+## Q11: `FusedMoEKernelModularImpl` 调用链的完整分支
+
+**答**（`modular_kernel.py` L1016）：
+
+```
+apply (L1332)
+├─ [A] inplace? → 是：output 复用 hidden_states（要求无 shared_experts）
+├─ _prepare (L1120)
+│   ├─ [B] supports_async()? 否（no_dp_ep）→ 同步 prepare
+│   │                        是（all2all 后端）→ prepare_async
+│   │   └─ [C] DBO 双批次重叠? → hook 挂 ubatch 上下文
+├─ _fused_experts (L1196)
+│   ├─ [D] M_full==0? → 空批次短路（EP 下某卡可能收不到 token）
+│   ├─ _allocate_buffers（workspace13 与 output 共享内存）
+│   └─ fused_experts.apply → TritonExperts.apply → _prepare_expert_assignment
+│      → moe_align_block_size（最初入口）
+└─ _finalize (L1267)
+    ├─ [E] supports_async()? 否 → 同步 finalize（加权+reduce）
+    │                        是 → finalize_async
+    └─ [F] shared_experts 与 combine 通信重叠（MK_INTERNAL_OVERLAPPED）
+```
+
+六个分支点：A 省显存；B 取决于通信后端能力；C DBO 计算/通信互遮；D EP 空批次保护；E 归并是否与通信重叠；F 把 dense 专家塞进 combine 等待窗口。
 
 ---
 *本文档由用户开题、Claudian 对照 v0.20.2 源码（commit bc150f5）补充整理，待用户确认后 ingest。*
