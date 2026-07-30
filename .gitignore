@@ -1,0 +1,25 @@
+# ========== Obsidian ==========
+# 工作区状态（每台设备不同，避免冲突）
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/workspaces.json
+
+# 本地缓存
+.obsidian/cache
+.obsidian/plugins/*/data.json
+
+# 如果你想让每台设备用不同的外观，可以再加：
+# .obsidian/appearance.json
+
+# 系统垃圾文件
+.DS_Store
+Thumbs.db
+.trash/
+
+# ========== 工具/会话数据 ==========
+.claude/
+.claudian/
+
+# ========== Git 冲突/临时文件 ==========
+*.orig
+*.tmp
