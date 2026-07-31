@@ -44,9 +44,9 @@ print(prof.key_averages().table())                         # 汇总表
 
 `ProfilerActivity` 的取值（2.12）：`CPU`、`CUDA`、`XPU`、`MTIA`、`HPU`、`PrivateUse1`（第三方后端自定义）。两类完全不同的东西：
 
-| activity | 记录什么 | 事件名字长什么样 | 需要什么 |
-|---|---|---|---|
-| `CPU` | **主机侧**所有算子调用 | `aten::flatten`、`aten::clone` | 什么都不要，永远可用 |
+| activity | 记录什么               | 事件名字长什么样                                                | 需要什么            |
+| -------- | ------------------ | ------------------------------------------------------- | --------------- |
+| `CPU`    | **主机侧**所有算子调用      | `aten::flatten`、`aten::clone`                           | 什么都不要，永远可用      |
 | `CUDA` 等 | **设备侧** kernel 时间线 | CUDA kernel 的函数名（如 `Memcpy DtoD`、各种 elementwise kernel） | 对应硬件 + kineto 库 |
 
 关键认知：**`aten::xxx` 这个名字只存在于 CPU 侧**（dispatcher 在 CPU 上运行）。即使 tensor 在 GPU 上，每次调用在 CPU 侧也会留下事件（kernel launch），所以**看"dispatch 了哪个算子"永远用 `CPU`**；`CUDA` 是给你看 GPU 上实际跑了哪些 kernel、耗时多少的，两者通常一起开来对齐时间线。
