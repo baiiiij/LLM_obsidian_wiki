@@ -38,7 +38,7 @@ updated: 2026-07-31
 
 ## Queries（问答沉淀）
 
-- [[pytorch-flatten-调用链路定位]] — 从 .pyi 死路出发反向定位 aten 算子源码；flatten→reshape 链路；computeStride 判定 view/copy
+- [[pytorch-flatten-调用链路定位]] — 对照 2.14 源码实测：flatten(TensorShape.cpp:4121)→reshape(:1976)→computeStride 判定 view/copy；含 build 生成 vs 源码自带文件速查表
 
 ## Synthesis（综合分析）
 

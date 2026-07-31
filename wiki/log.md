@@ -118,3 +118,15 @@
 **关键知识点**：.pyi 由 `tools/pyi/gen_pyi.py` 生成，是死路；定位原点是 `aten/src/ATen/native/native_functions.yaml`；flatten 是 `structured_delegate: reshape`，非独立 kernel；reshape（CompositeImplicitAutograd，TensorShape.cpp）内 `computeStride` 贪心匹配连续段——成功走 `_reshape_alias/as_strided`（view，0 拷贝），失败走 `clone/contiguous`（拷贝）；实证工具：`TORCH_SHOW_DISPATCH_TRACE=1`、profiler 看 `aten::clone/copy_`、`._base is t`。
 
 **待验证**：具体行号与 mkldnn/nested tensor 的 dispatch 分支以用户本地编译版本为准（未对照其实际源码树）。
+
+## [2026-07-31] update | flatten 链路对照本地源码实测定稿
+
+用户反馈初版调用链解释不清晰，且要求标注 build 生成 vs 源码自带。找到本机源码树 `/home/admin/code/LLM/source_code/pytorch`（version.txt=2.14.0a0，用户称 2.12，结构一致），逐文件核实后重写。
+
+**勘误（重要）**：2.12+ 的 `flatten.using_ints` 在 yaml 中**没有 `structured_delegate: reshape`**（旧版本才有），而是无 dispatch 段 = 默认 CompositeImplicitAutograd，直接实现于 TensorShape.cpp:4121，且**直接 C++ 调用** `native::reshape_symint`（不再走 dispatcher）。已同步修正 [[PyTorch-ATen-Dispatcher]]。
+
+**实测要点**：
+- flatten 本体 TensorShape.cpp:4121（0 维→reshape({1})；start==end→return self；拼 shape→reshape_symint）
+- reshape_symint :1976 三分支：contiguous 快路径 view_symint；computeStride 成功→_reshape_alias→alias_with_sizes_and_strides(:1945，共享 Storage + set_sizes_and_strides)；失败→clone(Contiguous)+_unsafe_view
+- computeStride 模板实现 TensorUtils.cpp:325（双指针连续块匹配，填不满返回 nullopt）
+- build 产物落点：写回源码树（torch/_C/__init__.pyi、torch/csrc/autograd/generated/）vs build 目录（build/aten/src/ATen/，cmake/Codegen.cmake:213 --install_dir）
