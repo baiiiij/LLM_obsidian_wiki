@@ -106,3 +106,15 @@
 **更新页面**：[[moe_align_block_size]]、raw 文档 §3.3
 
 **关键知识点**：naive 判断依据是本 forward 的 token 数而非推理阶段——decode 单人/小流量（batch≤4）才触发；生产高并发 decode 与 prefill 走对齐模式；EP 永不 naive；投机解码加速阈值突破；分支逐 step 动态切换、结果等价。
+
+## [2026-07-31] query | torch.flatten 调用链路定位（view vs copy）
+
+用户问：IDE 点进 `Tensor.flatten` 只见 `torch/_C/__init__.pyi` 类型存根，如何定位源码调用链、dispatch 机制、复制与只改 metadata 的判断条件。
+
+**新建页面**：
+- 问答沉淀：[[pytorch-flatten-调用链路定位]]
+- 概念：[[PyTorch-ATen-Dispatcher]]
+
+**关键知识点**：.pyi 由 `tools/pyi/gen_pyi.py` 生成，是死路；定位原点是 `aten/src/ATen/native/native_functions.yaml`；flatten 是 `structured_delegate: reshape`，非独立 kernel；reshape（CompositeImplicitAutograd，TensorShape.cpp）内 `computeStride` 贪心匹配连续段——成功走 `_reshape_alias/as_strided`（view，0 拷贝），失败走 `clone/contiguous`（拷贝）；实证工具：`TORCH_SHOW_DISPATCH_TRACE=1`、profiler 看 `aten::clone/copy_`、`._base is t`。
+
+**待验证**：具体行号与 mkldnn/nested tensor 的 dispatch 分支以用户本地编译版本为准（未对照其实际源码树）。

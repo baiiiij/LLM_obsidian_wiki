@@ -1,7 +1,7 @@
 ---
 type: index
 title: Wiki 内容目录
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # Index — 内容目录
@@ -29,6 +29,7 @@ updated: 2026-07-30
 - [[EPLB]] — 专家并行负载均衡：冗余专家、逻辑/物理双层 ID、后台 rebalance
 - [[All-to-All]] — 集合通信原语对比（All-Reduce/All-Gather/Reduce-Scatter/All-to-All）
 - [[Context Parallel]] — 上下文并行（PCP/DCP）：超长序列切段的并行策略
+- [[PyTorch-ATen-Dispatcher]] — aten 算子路由系统：native_functions.yaml 原点、codegen 管线、view vs copy 分水岭
 
 ## Sources（来源摘要）
 
@@ -37,7 +38,7 @@ updated: 2026-07-30
 
 ## Queries（问答沉淀）
 
-_（暂无）_
+- [[pytorch-flatten-调用链路定位]] — 从 .pyi 死路出发反向定位 aten 算子源码；flatten→reshape 链路；computeStride 判定 view/copy
 
 ## Synthesis（综合分析）
 

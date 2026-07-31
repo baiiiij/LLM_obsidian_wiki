@@ -1,7 +1,7 @@
 ---
 type: overview
 title: 全局摘要
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # Overview — 知识库全局摘要
@@ -12,7 +12,7 @@ updated: 2026-07-30
 
 - 目标与范围：见 [[purpose]]（LLM 算子开发，五层结构）
 - 来源数量：2
-- 页面数量：18（3 实体 + 12 概念 + 2 来源摘要 + 1 索引 + 1 本页）
+- 页面数量：21（3 实体 + 13 概念 + 2 来源摘要 + 1 问答 + 1 索引 + 1 本页）
 
 ## 主题地图
 
@@ -37,7 +37,7 @@ MoE（模型结构：路由 + top-k 稀疏激活）
 | 层次 | 状态 |
 |---|---|
 | 1. 模型层 | MoE 入口页，含 Shared/Latent/SP 扩展；缺具体模型结构细节（如 MLA、GQA） |
-| 2. 框架层 | vLLM MoE 路径已有深度（v0.20.2 runner + 模块化 kernel）；PagedAttention/调度器空白 |
+| 2. 框架层 | vLLM MoE 路径已有深度（v0.20.2 runner + 模块化 kernel）；PyTorch ATen Dispatcher 入口页（codegen/dispatch/view-copy）；PagedAttention/调度器空白 |
 | 3. 算子层 | 2 个具体算子（moe_align + Grouped GEMM）+ Triton 入口；FlashAttention 空白 |
 | 4. 硬件层 | 空白 |
 | 5. 底层抽象层 | 空白（SIMT/SIMD/SPMD 尚无页面） |
