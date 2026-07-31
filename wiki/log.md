@@ -157,3 +157,22 @@
 - 无 GPU 机器请求 CUDA activity：仅 warning "CUDA is not available, disabling CUDA profiling"，不报错
 - 名字不一致实例（实测）：a+a→aten::add；torch.concat→aten::concat→aten::cat；a@a→aten::matmul→aten::mm
 - 胶水链四文件闭环：templates/python_variable_methods.cpp（${py_methods} 占位）→ gen_python_functions.py → generated/python_variable_methods.cpp → python_variable.cpp:3887/3913 挂载到 torch._C.TensorBase
+
+## [2026-07-31] update | moe_align_block_size 概念页重写：从零讲解的全链路文档
+
+用户反馈：前置/后置计算要说明清楚，避免过段时间忘上下文再重新理解。按"假设读者从没见过大模型计算流程"的要求整体重写 [[moe_align_block_size]]。
+
+**新文档结构**（九章，从零背景到两条下游路径）：
+- §1 背景：token/hidden states、Transformer 层 FFN = 两次 GEMM、GEMM 的**计算操作与访存操作**、权重复用是 FFN 快慢核心指标
+- §2 MoE 正常算法：为什么用专家（稀疏激活）、四步流程（路由打分→top-k→逐对 FFN→加权求和）、计算/访存清单、直白优缺点
+- §3 朴素实现四宗罪：动态形状（CUDA Graph 无法捕获）、权重读多算少（访存/计算比）、block lane 浪费、数据散乱 gather——"散 + 动 vs 规整 + 静态"的核心矛盾
+- §4 理想解法 Grouped GEMM：前置计算（布局整理：按专家分组+补齐 BLOCK_M）→ 后置计算（每 block 查一次专家号、加载一次权重、算 BLOCK_M 行）——"跳着取 token"即 sorted_token_ids 间接寻址
+- §5 vLLM 整体优化：流水线（select_experts → _prepare_expert_assignment → fused_moe_kernel → finalize）、融合点清单（路由合并、w13+SiLU+w2 一次 launch）、条件分支表、调用链位置
+- §6 本体三段式：数人数（原子计数）→ 算位置（带 pad 前缀和）→ 写回（scatter），每段直白解释
+- §7 后置计算：fused_moe_kernel 消费伪代码逐行注释 + 访存特征
+- §8 naive/native 捷径：触发条件直白含义（平均每专家 ≤1/4 对 → 对齐无收益）、**两条路宏观对照表**（加载一次专家算 BLOCK_M 行跳着取 token vs 一块一对）、下游两种方言、roofline 收益代价、微型例子、适用范围辨析
+- §9 周边链接
+
+**同步更新**：[[index]] 该页摘要；页面 frontmatter updated → 2026-07-31。
+
+**依据**：与本地 vllm 源码树（v0.22.1）对照了 `moe_align_block_size.py` 包装层与 `csrc/moe/moe_align_sum_kernels.cu`（atomicAdd 计数 / BlockScan 前缀和 / scatter 写回），三段式描述与源码一致；正文仍以 v0.20.2 调用链为准。
