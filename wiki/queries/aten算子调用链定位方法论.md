@@ -133,7 +133,7 @@ aten::view        54.13%     76.365us       54.13%     76.365us      76.365us   
 
 ```bash
 rg "func: flatten" aten/src/ATen/native/native_functions.yaml   # 精确定位算子定义
-rg "Tensor flatten" aten/src/ATen/native/                        # 找 C++ 实现
+                        # 找 C++ 实现
 rg "computeStride" aten/ -g "*.cpp"                              # 只搜 .cpp 文件
 ```
 
@@ -146,7 +146,7 @@ rg "computeStride" aten/ -g "*.cpp"                              # 只搜 .cpp �
 **"过 dispatcher"的精确定义**：调用经过 `c10::Dispatcher` 的**算子注册表查表**。一次完整旅程：
 
 ```
-at::clone(t)  ← 你写的/生成的包装代码
+at::clone(t)  ← 调用方：任何 C++ 代码（你写的扩展 / 生成的 TensorBody 包装 / PyTorch 自己的 kernel）
   → 从 t 算出 DispatchKeySet（CPU/CUDA？requires_grad？……）
   → 查表：先命中 Autograd key 的 kernel（记录 backward 所需信息）
        → 内部 redispatch：摘掉 Autograd key 再查一次
@@ -155,6 +155,8 @@ at::clone(t)  ← 你写的/生成的包装代码
 ```
 
 **触发 dispatch 的入口只有三种**：① Python 绑定（生成的 THPVariable_xxx）；② C++ 里调 `at::foo(...)` 或 `tensor.foo()`（生成的包装方法）；③ 显式 `at::_ops::foo::call(...)`。
+
+> ⚠️ 上面例子里 `at::clone(t)` 的**调用方**不一定是"你"。它只是"某个调了 `at::` 包装形式的 C++ 代码"的占位例——在 flatten 链路中，这个调用方是 PyTorch 自己的 kernel：`reshape_symint` 内部写了 `self.clone(MemoryFormat::Contiguous)`（2.12 TensorShape.cpp:2104），写这行代码的是 PyTorch 的 kernel 作者，不是你。判别"谁调了它"靠 profiler 事件树的父子关系（clone 嵌在 flatten 下面），不是靠调用形式。
 
 **"不过 dispatcher"**：`native::reshape_symint(self, shape)` 就是一个**普通 C++ 函数调用**——编译器直接跳转，没有查表、没有 key、没有 RecordFunction、profiler 和 torch.compile 都看不见它。
 
@@ -166,6 +168,49 @@ at::clone(t)  ← 你写的/生成的包装代码
 | `self.clone(...)` | 过 dispatcher | 拷贝需要 per-device kernel（CPU memcpy / CUDA copy kernel），必须查表选后端 |
 
 一句话：**dispatch = 按 tensor 属性动态路由到正确实现 + 触发 autograd/profiler/compile 等所有横切机制；直接调用 = 静态确定的普通函数跳转，什么都不触发。**
+
+## 为什么 clone 会 dispatch、reshape 不会？（机械层面）
+
+dispatch 不是算子的"属性"，而是**你调用的那个函数，函数体里有没有查表代码**。看两者各自进入的函数体：
+
+**`self.clone(...)`**（2.12 TensorShape.cpp:2104，reshape_symint 内部）→ 生成的 `Tensor::clone` → `at::_ops::clone::call(...)`。`call` 的函数体是 torchgen 生成的，生成器源码（torchgen/gen.py:667）白纸黑字写着它会长成什么样：
+
+```cpp
+// at::_ops::clone::call 的函数体（torchgen gen.py:667 生成）
+static auto op = create_clone_typed_handle();  // = c10::Dispatcher::singleton()
+                                               //   .findSchemaOrThrow("aten::clone", "")
+return op.call(self, memory_format);           // ← 进 dispatcher 查表跳转
+```
+
+也就是说 `at::clone` 这个包装的**整个函数体就是"查表 + 跳转"**——你永远摸不到 clone 的真实实现，是包装替你查的。
+
+**`native::reshape_symint(self, shape)`** → TensorShape.cpp:2058 手写的普通函数，函数体就是逻辑本身（拼 shape、computeStride）。没有表、没有 key，编译/链接期就确定了跳转目标。
+
+所以"一会儿 dispatch 一会儿内部调用"毫无神秘：**kernel 作者在写代码时，对每个调用点二选一**——调生成的包装（过表）或调手写的 `native::` 实现（直连）。
+
+## 为什么会有 dispatcher 这个概念？（设计动机）
+
+要解决的问题：**一个算子名对应 N 个实现，选哪个在运行时才知道**。clone 干什么取决于 tensor 的属性——CPU tensor 走 memcpy、CUDA tensor 走 copy kernel、`requires_grad=True` 还要记 backward 节点、torch.compile tracing 时还要被拦截。而写 reshape 的 TensorShape.cpp 是**设备无关文件，只编译一次**；甚至 CUDA 之外的后端可以是运行时加载的插件（PrivateUse1 自定义芯片），编译 libtorch 时根本不存在。
+
+C++ 原生的方案都不够：
+
+| 方案 | 为什么不行 |
+|---|---|
+| 调用点写 if/switch | 2000+ 算子 × N 后端，每加一个后端要改几千个调用点；插件后端编译期不存在，写不进 switch |
+| 虚函数 | vtable 只支持**一根轴**的多态（对象类型）。PyTorch 有多根正交的轴要**同时**生效：设备、autograd（`requires_grad` 是运行时标志，不是类型）、tracing、functionalization…… |
+| **注册表（dispatcher）** | 全局表：算子名 → 按优先级排列的 (DispatchKey → kernel)。调用时从 tensor 算出 key 位掩码，按优先级找第一个注册了的 kernel。加后端 = 运行时注册新 kernel，**调用点零改动** |
+
+外加两个杀手级收益：
+
+1. **横切机制的统一拦截点**：profiler 的 RecordFunction、dispatch trace、torch.compile 的拦截全挂在"查表"这一步——一次插桩覆盖全部 2000+ 算子。不过 dispatcher 的调用它们全看不见（这就是 profiler 里没有 `aten::reshape` 的原因）。
+2. **autograd 不用逐算子手写**：Autograd key 的优先级高于后端 key，注册一份包装就自动给所有算子套上 backward 记录。
+
+## 选择的判断准则
+
+> **实现是否随 tensor 的运行时属性（设备 / 梯度 / 追踪）而变？变 → 必须 dispatch；不变 → 直接调用。**
+
+- clone：拷贝实现按设备路由 → 过表。
+- reshape 的 shape 逻辑：纯整数运算，只碰 sizes/strides 元数据，CPU/CUDA 一字不差 → 直连（过表是纯浪费：dispatch 有开销——算 key、哈希查找、间接跳转；且 flatten 已过 autograd 层，再过表会重复记录 view）。
 
 # 三、七步 SOP（不凭先验经验的推导流程）
 

@@ -206,3 +206,22 @@
 - [[index]]、[[overview]]：新页入账（概念 13→14）
 
 **结构意图**：背景页作为各算子页（未来的 FlashAttention 等）共同的可复用前置，算子页聚焦本体。
+
+## [2026-07-31] fix | dispatch 示意图 at::clone(t) 的"调用方"注释歧义
+
+用户指出：示意图里 `at::clone(t) ← 你写的/生成的包装代码`，但"我没有写"。
+
+**修正**：[[aten算子调用链定位方法论]] 示意图注释改为"任何 C++ 代码（你写的扩展 / 生成的 TensorBody 包装 / PyTorch 自己的 kernel）"并加注：flatten 链路中 clone 的调用方是 PyTorch kernel 作者（`reshape_symint` 内的 `self.clone(...)`，2.12 TensorShape.cpp:2104）；判别"谁调了它"靠 profiler 事件树父子关系，不是靠调用形式。
+
+## [2026-07-31] update | 为什么会有 dispatcher：设计动机补全
+
+用户反馈"回答片面"：只讲了是什么（clone 过表/reshape 不过），没讲为什么——为什么 clone 会 dispatch、dispatch 与内部调用的本质区别、为什么有 dispatch 这个概念。
+
+**更新页面**：[[aten算子调用链定位方法论]] 第二节扩为四小节。
+
+**关键知识点**：
+- 机械层面：dispatch = "你调的函数体里有没有查表代码"。`at::_ops::clone::call` 的整个函数体就是 `Dispatcher::singleton().findSchemaOrThrow` + `op.call`（torchgen gen.py:667 生成器原文为证）；`native::reshape_symint` 是手写普通函数，编译期定跳转。kernel 作者对每个调用点二选一。
+- 设计动机：一算子名→N 实现，运行时才能选。if/switch 方案死于规模与插件后端（编译期不存在）；虚函数只有一根多态轴，PyTorch 有多根正交轴（设备/autograd/tracing/functionalization）同时生效；注册表方案加后端零调用点改动。
+- 杀手级收益：横切机制（profiler/compile）一次插桩覆盖全算子（不过表则全看不见）；Autograd key 高优先级自动套 backward。
+- 判断准则：实现随 tensor 运行时属性而变 → dispatch；不变 → 直连（过表有开销：算 key/哈希查找/间接跳转）。
+- 顺带勘误：reshape 内 clone 调用点在 2.12 TensorShape.cpp:2104（此前误写 2068，已全局修正）。
