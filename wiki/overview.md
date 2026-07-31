@@ -12,14 +12,15 @@ updated: 2026-07-31
 
 - 目标与范围：见 [[purpose]]（LLM 算子开发，五层结构）
 - 来源数量：2
-- 页面数量：22（3 实体 + 13 概念 + 2 来源摘要 + 2 问答 + 1 索引 + 1 本页）
+- 页面数量：23（3 实体 + 14 概念 + 2 来源摘要 + 2 问答 + 1 索引 + 1 本页）
 
 ## 主题地图
 
 ### 纵向链路（模型层 → 框架层 → 算子层）
 
 ```
-MoE（模型结构：路由 + top-k 稀疏激活）
+LLM 前向计算（基础背景：token/FFN/GEMM 计算与访存）
+  └─ MoE（模型结构：路由 + top-k 稀疏激活）
   ├─ Shared Experts（dense 辅助专家）
   ├─ Latent MoE（降维-升维投影）
   ├─ 序列并行 SP（TP 下 token 切分）
@@ -36,7 +37,7 @@ MoE（模型结构：路由 + top-k 稀疏激活）
 
 | 层次 | 状态 |
 |---|---|
-| 1. 模型层 | MoE 入口页，含 Shared/Latent/SP 扩展；缺具体模型结构细节（如 MLA、GQA） |
+| 1. 模型层 | LLM 前向计算背景页 + MoE 入口页（含 Shared/Latent/SP 扩展）；缺具体模型结构细节（如 MLA、GQA） |
 | 2. 框架层 | vLLM MoE 路径已有深度（v0.20.2 runner + 模块化 kernel）；PyTorch ATen Dispatcher 入口页（codegen/dispatch/view-copy）；PagedAttention/调度器空白 |
 | 3. 算子层 | 2 个具体算子（moe_align + Grouped GEMM）+ Triton 入口；FlashAttention 空白 |
 | 4. 硬件层 | 空白 |

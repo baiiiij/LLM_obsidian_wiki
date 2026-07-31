@@ -62,6 +62,38 @@ with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
 
 查本机支持哪些：`torch.autograd.profiler._supported_activities()`（本机返回 `{ProfilerActivity.CPU}`）。
 
+### profiler 输出表格怎么读（用户 GPU 机实测案例）
+
+```python
+t = torch.randn(2, 3, 4, device='cuda')
+with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:  # ★ 两个都要开
+    t.flatten(0, 1)                    # 连续 → view
+    t.transpose(0, 1).flatten(0, 1)    # 非连续 → copy
+print(prof.key_averages().table())
+```
+
+**列的含义**（以 CPU-only 实测输出为例）：
+
+```
+     Name      Self CPU %   Self CPU   CPU total %   CPU total   CPU time avg   # of Calls
+aten::flatten     45.87%     64.712us      100.00%    141.077us     141.077us       1
+aten::view        54.13%     76.365us       54.13%     76.365us      76.365us       1
+```
+
+| 列 | 含义 |
+|---|---|
+| `Name` | 事件名——**dispatch 了哪些算子就看这列**；事件按调用关系树状嵌套（flatten 是父，view 是子） |
+| `Self CPU` | 算子**自己函数体**的耗时，**不含子调用** |
+| `CPU total` | 算子**连同所有子调用**的总耗时。flatten：141.077us = 自己 64.712us + 子事件 view 76.365us |
+| `CPU time avg` / `# of Calls` | 平均单次耗时 / 调用次数 |
+
+**GPU 实验的正确开法与"眼见为实"**：必须 `CPU + CUDA` 都开（只开 CUDA 时表里**一个 aten 算子都没有**，只剩 `cudaDeviceSynchronize`（runtime API 事件）和 `Activity Buffer Request`（kineto 内部开销）这类非算子噪音）。双开后表格多出 `Self CUDA` 列：
+
+- 连续张量 flatten：CPU 列 `aten::flatten → aten::view`，**Self CUDA 全为 0**——GPU 上零 kernel，"view 零拷贝"眼见为实；
+- 非连续 flatten：CPU 列多出 `aten::clone/copy_/_unsafe_view`，**Self CUDA 出现 `Memcpy DtoD`**——显存里真的搬了数据。
+
+**噪音识别**：`Profiler clears events at the end of each cycle` warning（多周期采集默认只保留当前周期，想累积设 `acc_events=True`）与 `USDT:...profiler_start/stop` 日志（kineto 探针）都是 profiler 基础设施输出，与你的代码无关。
+
 ## 1.3 为什么 profiler 能看出 dispatch 了哪个算子
 
 因为钩子（RecordFunction）**就埋在 dispatcher 里**——每一次"过 dispatcher"的调用都会被记录。反过来也成立：**不过 dispatcher 的调用，profiler 完全看不见**。

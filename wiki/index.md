@@ -18,7 +18,8 @@ updated: 2026-07-31
 ## Concepts（概念）
 
 - [[MoE]] — 混合专家模型：路由 + top-k 稀疏激活，决定底层算子形态；含 Shared/Latent/SP/EPLB 扩展
-- [[moe_align_block_size]] — vLLM MoE 布局整理算子：从零背景（MoE 正常算法+计算/访存）→ 朴素缺点 → vLLM 整体优化与融合点 → 三段式前置计算 → 后置 grouped GEMM → naive/native 两条下游路径对照
+- [[LLM 前向计算]] — 从零背景页：token/hidden states、Transformer 层（attention + FFN = 两次 GEMM + 激活）、GEMM 的计算与访存、权重复用是 FFN 快慢核心指标；各算子页共同的前置背景
+- [[moe_align_block_size]] — vLLM MoE 布局整理算子：朴素缺点 → vLLM 整体优化与融合点 → 三段式前置计算 → 后置 grouped GEMM → naive/native 两条下游路径对照（背景另文：[[LLM 前向计算]]）
 - [[Grouped GEMM]] — MoE 的核心计算形态：同专家 token 共享权重，按块复用
 - [[专家并行 EP]] — 专家切分到多卡；expert_map 与 -1 跳过机制；naive dispatch 通信
 - [[数据并行 DP]] — token 切分到多卡；All-to-All Dispatch/Combine 流水线

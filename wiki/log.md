@@ -158,6 +158,14 @@
 - 名字不一致实例（实测）：a+a→aten::add；torch.concat→aten::concat→aten::cat；a@a→aten::matmul→aten::mm
 - 胶水链四文件闭环：templates/python_variable_methods.cpp（${py_methods} 占位）→ gen_python_functions.py → generated/python_variable_methods.cpp → python_variable.cpp:3887/3913 挂载到 torch._C.TensorBase
 
+## [2026-07-31] update | profiler 表格读法 + GPU 实验正确开法（用户实测反馈）
+
+用户在 GPU 机（vllm 环境）实测：CPU-only 输出正常（aten::flatten→aten::view）；只开 CUDA activity 后 aten 算子全消失，只剩 cudaDeviceSynchronize + Activity Buffer Request。
+
+**更新页面**：[[aten算子调用链定位方法论]] 新增"profiler 输出表格怎么读"小节。
+
+**关键知识点**：Name 列即 dispatch 算子名，事件树状嵌套；Self CPU=自身耗时（不含子调用），CPU total=含子调用（flatten 141.077us = self 64.712 + view 76.365）；GPU 实验必须 CPU+CUDA 双开，Self CUDA 列全 0 = view 零拷贝眼见为实，Memcpy DtoD = 真拷贝；Activity Buffer Request/USDT 日志/cycle warning 均为 profiler 自身噪音。
+
 ## [2026-07-31] update | moe_align_block_size 概念页重写：从零讲解的全链路文档
 
 用户反馈：前置/后置计算要说明清楚，避免过段时间忘上下文再重新理解。按"假设读者从没见过大模型计算流程"的要求整体重写 [[moe_align_block_size]]。
@@ -176,3 +184,17 @@
 **同步更新**：[[index]] 该页摘要；页面 frontmatter updated → 2026-07-31。
 
 **依据**：与本地 vllm 源码树（v0.22.1）对照了 `moe_align_block_size.py` 包装层与 `csrc/moe/moe_align_sum_kernels.cu`（atomicAdd 计数 / BlockScan 前缀和 / scatter 写回），三段式描述与源码一致；正文仍以 v0.20.2 调用链为准。
+
+## [2026-07-31] update | 解耦背景：LLM 前向计算独立成页
+
+用户要求把 [[moe_align_block_size]] 中的 LLM 通用背景（原 §1）解耦为独立文档，算子页只留结论 + 链接。
+
+**新建页面**：
+- [[LLM 前向计算]] — 从零背景页：token/hidden states、Transformer 层（attention + FFN = 两次 GEMM + 激活）、GEMM 的计算与访存、权重复用核心指标；末尾"向后看"一节说明这些事实如何决定 MoE / 布局优化 / memory-bound 等下层形态
+
+**更新页面**：
+- [[moe_align_block_size]]：§1 收缩为"继承来的三个结论"（FFN 最重 / roofline / 权重复用是共同判据），指向新页；阅读地图、§9 链接同步
+- [[MoE]]：页首加前置背景链接
+- [[index]]、[[overview]]：新页入账（概念 13→14）
+
+**结构意图**：背景页作为各算子页（未来的 FlashAttention 等）共同的可复用前置，算子页聚焦本体。

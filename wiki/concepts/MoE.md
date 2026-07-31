@@ -2,7 +2,7 @@
 type: concept
 title: MoE（混合专家模型）
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31
 sources: ["raw/sources/moe_align_block_size交互讲解.html", "raw/sources/moe_align_block_size 路径.md"]
 tags: [moe, 模型层]
 ---
@@ -10,6 +10,7 @@ tags: [moe, 模型层]
 # MoE（Mixture of Experts，混合专家）
 
 > 所属层次：[[purpose|模型层]]。本页随更多来源持续扩充。
+> 前置背景（token / FFN / GEMM 的计算与访存）：[[LLM 前向计算]]。
 
 ## 核心机制
 
