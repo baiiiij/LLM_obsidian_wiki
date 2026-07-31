@@ -17,11 +17,11 @@ tags: [pytorch, aten, dispatcher, view, codegen]
 
 看 PyTorch 源码最大的困惑是"文件到底在哪"。其实只有三类：
 
-| 世界 | 说明 | 例子 |
-|---|---|---|
-| ① 源码自带 | git clone 就有，直接可读 | `aten/src/ATen/native/TensorShape.cpp` |
-| ② build 生成·写回源码树 | 编译时生成，但落在源码目录里 | `torch/_C/__init__.pyi`、`torch/csrc/autograd/generated/` |
-| ③ build 生成·落在 build/ | 编译时生成，只在 build 目录 | `build/aten/src/ATen/ops/flatten.h` |
+| 世界                   | 说明                | 例子                                                       |
+| -------------------- | ----------------- | -------------------------------------------------------- |
+| ① 源码自带               | git clone 就有，直接可读 | `aten/src/ATen/native/TensorShape.cpp`                   |
+| ② build 生成·写回源码树     | 编译时生成，但落在源码目录里    | `torch/_C/__init__.pyi`、`torch/csrc/autograd/generated/` |
+| ③ build 生成·落在 build/ | 编译时生成，只在 build 目录 | `build/aten/src/ATen/ops/flatten.h`                      |
 
 **你点进 `.pyi` 看不到实现，是因为它属于世界②**——`tools/pyi/gen_pyi.py`（世界①）在编译时生成的纯类型存根，只服务 IDE 补全，从来不含实现。
 
