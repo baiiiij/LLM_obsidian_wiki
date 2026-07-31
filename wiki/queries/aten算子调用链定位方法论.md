@@ -80,17 +80,17 @@ aten::flatten     45.87%     64.712us      100.00%    141.077us     141.077us   
 aten::view        54.13%     76.365us       54.13%     76.365us      76.365us       1
 ```
 
-| 列 | 含义 |
-|---|---|
-| `Name` | 事件名——**dispatch 了哪些算子就看这列**；事件按调用关系树状嵌套（flatten 是父，view 是子） |
-| `Self CPU` | 算子**自己函数体**的耗时，**不含子调用** |
-| `CPU total` | 算子**连同所有子调用**的总耗时。flatten：141.077us = 自己 64.712us + 子事件 view 76.365us |
-| `CPU time avg` / `# of Calls` | 平均单次耗时 / 调用次数 |
+| 列                             | 含义                                                                    |
+| ----------------------------- | --------------------------------------------------------------------- |
+| `Name`                        | 事件名——**调用关系树状嵌套（flatten 是父，view 是子）                                   |
+| `Self CPU`                    | 算子**自己函数体**的耗时，**不含子调用**                                              |
+| `CPU total`                   | 算子**连同所有子调用**的总耗时。flatten：141.077us = 自己 64.712us + 子事件 view 76.365us |
+| `CPU time avg` / `# of Calls` | 平均单次耗时 / 调用次数                                                         |
 
 **GPU 实验的正确开法与"眼见为实"**：必须 `CPU + CUDA` 都开（只开 CUDA 时表里**一个 aten 算子都没有**，只剩 `cudaDeviceSynchronize`（runtime API 事件）和 `Activity Buffer Request`（kineto 内部开销）这类非算子噪音）。双开后表格多出 `Self CUDA` 列：
 
 - 连续张量 flatten：CPU 列 `aten::flatten → aten::view`，**Self CUDA 全为 0**——GPU 上零 kernel，"view 零拷贝"眼见为实；
-- 非连续 flatten：CPU 列多出 `aten::clone/copy_/_unsafe_view`，**Self CUDA 出现 `Memcpy DtoD`**——显存里真的搬了数据。
+- 非连续 latten：CPU 列多出 `aten::clone/copy_/_unsafe_view`，**Self CUDA 出现 `Memcpy DtoD`**——显存里真的搬了数据。
 
 **噪音识别**：`Profiler clears events at the end of each cycle` warning（多周期采集默认只保留当前周期，想累积设 `acc_events=True`）与 `USDT:...profiler_start/stop` 日志（kineto 探针）都是 profiler 基础设施输出，与你的代码无关。
 
