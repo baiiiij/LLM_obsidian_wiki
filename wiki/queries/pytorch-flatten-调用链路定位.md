@@ -194,4 +194,5 @@ print(prof.key_averages().table())
 
 ## 相关页面
 
+- [[aten算子调用链定位方法论]] — 本文的"上游"：不凭先验经验推出这条链的七步 SOP
 - [[PyTorch-ATen-Dispatcher]] — codegen 管线与 dispatch 机制总览

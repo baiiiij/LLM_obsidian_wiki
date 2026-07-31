@@ -130,3 +130,17 @@
 - reshape_symint :1976 三分支：contiguous 快路径 view_symint；computeStride 成功→_reshape_alias→alias_with_sizes_and_strides(:1945，共享 Storage + set_sizes_and_strides)；失败→clone(Contiguous)+_unsafe_view
 - computeStride 模板实现 TensorUtils.cpp:325（双指针连续块匹配，填不满返回 nullopt）
 - build 产物落点：写回源码树（torch/_C/__init__.pyi、torch/csrc/autograd/generated/）vs build 目录（build/aten/src/ATen/，cmake/Codegen.cmake:213 --install_dir）
+
+## [2026-07-31] query | 不凭先验经验定位调用链的方法论
+
+用户追问：直接给文件/函数名是先验经验；预期流程是"Python 函数体里有分支、逐层点进去"，PyTorch 为什么不是？如何自己一步步推？
+
+**新建页面**：[[aten算子调用链定位方法论]]
+
+**实测实验**（本机 torch 2.6.0 + 2.14 源码树）：
+- `inspect.getsource(Tensor.flatten)` 报 TypeError method_descriptor → C 扩展方法的判别信号；对照 `Tensor.unflatten` 能拿到源码（torch/_tensor.py 有 Python 包装）→ "两种流程都有，逐算子判别"
+- docstring 自带 schema `flatten(start_dim=0, end_dim=-1) -> Tensor`（从 yaml 生成时写入）
+- profiler 实测：连续张量 flatten → aten::flatten + aten::view（_base is t）；transpose 后 → aten::flatten + clone/copy_/_unsafe_view（_base is None）；trace 中无 aten::reshape，证实 composite 直接调用
+- yaml 4 个 flatten overload 按参数类型匹配：int → using_ints；Dimname 三个属 named tensor 特性
+
+**核心原则**：能观测的不猜测（profiler/trace 拿 ground truth），能匹配的不背诵（参数类型对 overload），yaml 是唯一地图。

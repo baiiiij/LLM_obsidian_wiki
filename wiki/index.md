@@ -39,6 +39,7 @@ updated: 2026-07-31
 ## Queries（问答沉淀）
 
 - [[pytorch-flatten-调用链路定位]] — 对照 2.14 源码实测：flatten(TensorShape.cpp:4121)→reshape(:1976)→computeStride 判定 view/copy；含 build 生成 vs 源码自带文件速查表
+- [[aten算子调用链定位方法论]] — 不凭先验经验的七步 SOP：inspect.getsource 判别 Python 包装、docstring 拿 schema、profiler 拿 ground truth、按参数类型匹配 overload
 
 ## Synthesis（综合分析）
 
