@@ -236,6 +236,16 @@ with profile(activities=[ProfilerActivity.CPU]) as prof:
 | `CompositeImplicitAutograd: bar` | 同上，实现函数名是 bar | rg bar |
 | `structured_delegate: bar` | meta 算 shape 后委托给 bar | 看 bar（旧版 flatten 曾是这种，2.12 已改为直接实现） |
 
+### 搜索词 `Tensor flatten` 是怎么推出来的（不是经验）
+
+直接 `rg "flatten"` 在 TensorShape.cpp 一个文件就有 38 个命中（注释/调用点/同名函数），信噪比太低，需要收窄到"函数定义行"。收窄依据全部来自 yaml 本身：
+
+1. yaml 那行的 `-> Tensor(a)` 给出**返回类型**；torchgen 约定 C++ 实现签名 = 返回类型 + 算子名 + schema 参数（`Tensor(a) self`→`const Tensor& self`，`int`→`int64_t`）；
+2. 于是搜索词 = **返回类型 + 算子名 + `(`**，即 `rg "Tensor flatten"` → 从 38 收敛到 5，命中 `Tensor flatten(const Tensor& self, int64_t start_dim, ...)`，参数类型还能反向确认 overload（带 `DimnameList` 的是 named tensor 变体）；
+3. "无 dispatch 段 → 函数名 = 算子名"这条规则也不用背：build 后 `rg "aten::flatten" build/aten/src/ATen/RegisterCompositeImplicitAutograd*.cpp`，生成的注册表（dispatcher 的电话簿）里白纸黑字写着 op 名 → 实现函数的绑定，这是零先验路线。
+
+通用技巧：**命中太多加特征（返回类型/左括号/参数类型），命中太少减特征；搜索是迭代收窄，不是一击即中。**
+
 ## 第 6 步：读 C++，用 §二的概念分辨"过不过 dispatcher"
 
 2.12 定位到 `aten/src/ATen/native/TensorShape.cpp:4178` 的 `at::native::flatten`：算完目标 shape 后 `return native::reshape_symint(self, shape);`——直接调用，不过 dispatcher（与第 3 步 trace 里没有 `aten::reshape` 互相印证）。顺到 `reshape_symint`（:2058）就能看到 view/copy 分水岭 `computeStride`（详见 [[pytorch-flatten-调用链路定位]]）。

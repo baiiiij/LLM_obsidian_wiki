@@ -166,6 +166,14 @@
 
 **关键知识点**：Name 列即 dispatch 算子名，事件树状嵌套；Self CPU=自身耗时（不含子调用），CPU total=含子调用（flatten 141.077us = self 64.712 + view 76.365）；GPU 实验必须 CPU+CUDA 双开，Self CUDA 列全 0 = view 零拷贝眼见为实，Memcpy DtoD = 真拷贝；Activity Buffer Request/USDT 日志/cycle warning 均为 profiler 自身噪音。
 
+## [2026-07-31] update | "Tensor flatten" 搜索词的来源（去先验化）
+
+用户追问：`rg "Tensor flatten"` 里的 `Tensor` 前缀是否也是先验经验。
+
+**更新页面**：[[aten算子调用链定位方法论]] 第 5 步新增小节。
+
+**关键知识点**：搜索词 = yaml 返回类型（`-> Tensor(a)`）+ 算子名 + `(`，非背诵；实测 `rg "flatten"` 在 TensorShape.cpp 有 38 命中 → 加返回类型收敛到 5；参数类型（int64_t vs DimnameList）可反向确认 overload；零先验终极路线：build 后 rg op 名于 RegisterCompositeImplicitAutograd*.cpp，生成的注册表直接给出 op→实现函数绑定；搜索是迭代收窄（命中多加特征、命中少减特征）。
+
 ## [2026-07-31] update | moe_align_block_size 概念页重写：从零讲解的全链路文档
 
 用户反馈：前置/后置计算要说明清楚，避免过段时间忘上下文再重新理解。按"假设读者从没见过大模型计算流程"的要求整体重写 [[moe_align_block_size]]。
