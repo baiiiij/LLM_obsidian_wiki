@@ -262,18 +262,63 @@ rg "aten::reshape" build/aten/src/ATen/RegisterCompositeImplicitAutograd.cpp
 
 这一行 `m.impl(...)` 就是 dispatcher 表里的那一项——op 名（键）→ kernel 函数指针（值）。它是 SOP 第 4→5 步之间被黑盒化的拼图；不看它不影响找到实现，看了它链路才算"每一环都有实证"。
 
+## 代码生成地图：一个 yaml 输入，三个生成器，产物各有归属
+
+看懂完整链路的前提是知道**每个文件是谁生成的、从哪生成**。
+
+**唯一输入**：`aten/src/ATen/native/native_functions.yaml`。每个算子条目里的两个字段决定它的 Python 绑定长什么样：
+
+- `variants: function, method` —— `function` ⇒ 生成 `torch.op(...)` 形式；`method` ⇒ 生成 `t.op(...)` 形式（两个都写就两个都有）；
+- `python_module: nn`（可选）—— 有它则绑定进 `torch._C._nn` 而不是顶层 `torch`。
+
+**三个生成器及其产物**：
+
+| 生成器（源码自带） | 产物（build 生成） | 内容 |
+|---|---|---|
+| `torchgen/gen.py` | `build/aten/src/ATen/ops/{op}_ops.h` 等 per-op 头文件 | `at::_ops::{op}` 结构体（`call`/`redispatch`，body = 查表） |
+| 〃 | `build/aten/src/ATen/Functions.h/.cpp` | `at::{op}(...)` 命名空间函数 |
+| 〃 | `build/aten/src/ATen/core/TensorBody.h` + `TensorMethods.cpp` | `Tensor::{op}(...)` 方法 |
+| 〃 | `build/aten/src/ATen/Register{CPU,CUDA,CompositeImplicitAutograd,...}.cpp` | **注册表项** `m.impl("aten::{op}", TORCH_FN(kernel))` |
+| `tools/autograd/gen_python_functions.py` | `torch/csrc/autograd/generated/python_variable_methods.cpp` | `THPVariable_{op}`（**tensor 方法**绑定） |
+| 〃 | `torch/csrc/autograd/generated/python_torch_functions.cpp` | `torch.{op}` 绑定（**命名空间函数**） |
+| 〃 | `torch/csrc/autograd/generated/python_nn_functions.cpp`（及 linalg/fft/sparse/special/nested） | `torch._C._nn.{op}` 等分模块绑定 |
+| `tools/autograd/gen_autograd.py` | `torch/csrc/autograd/generated/VariableType*.cpp` | Autograd/ADInplaceOrView key 的包装 kernel（记 backward/view） |
+| `tools/pyi/gen_pyi.py` | `torch/_C/__init__.pyi` | 类型存根（IDE 用，**死路**） |
+
+模板都在源码树里：C++ 侧 `aten/src/ATen/templates/*.h/.cpp`，Python 绑定侧 `tools/autograd/templates/*.cpp`（含 `python_torch_functions.cpp`、`python_variable_methods.cpp`、`VariableType.cpp` 等，`${py_methods}` 占位符为证）。
+
+**挂载点**（生成的表怎么变成可调用的属性）：
+
+- `t.op` → `torch/csrc/autograd/python_variable.cpp:3887` `extern PyMethodDef variable_methods[]`，挂到 `torch._C.TensorBase` 类型；
+- `torch.op` → `torch/csrc/autograd/python_torch_functions_manual.cpp:539+` `gatherTorchFunctions_0/1/2()` 汇总生成的分片表，挂到 `torch` 模块。
+
+**拿到一个新算子，怎么知道找哪个绑定文件**（判定规则，非背诵——原文在 gen_python_functions.py:233-237：`is_method = python_module is None and Variant.method in variants`）：
+
+| 你写的调用形式 | 先查 | 落点 |
+|---|---|---|
+| `t.op(...)` | yaml 有 `variants: ..., method` | `python_variable_methods.cpp` 的 `THPVariable_op` |
+| `torch.op(...)` | yaml 有 `variants: function` | `python_torch_functions.cpp` |
+| `torch.nn.functional.op(...)` / `F.op` | `torch/nn/functional.py` 有 **Python 包装**（getsource 可读！） | 包装内部调 `torch._C._nn.op` → `python_nn_functions.cpp`（yaml 里 `python_module: nn`） |
+| `torch.linalg/fft/sparse/special.op` | 同上 | 对应 `python_{linalg,fft,sparse,special}_functions.cpp` |
+| `torch.save` / `torch.compile` / `torch.utils.*` | **不是 aten 算子**，yaml 里搜不到 | 纯 Python（`torch/*.py`），SOP 第 1 步 `inspect.getsource` 直接可读 |
+
 ## 完整分析链路（任一算子通用，每层附验证手段）
 
 ```
-Python t.op(...)
- → THPVariable_op         生成的 Python 绑定    验证：build 后 rg THPVariable_op torch/csrc/autograd/generated/
- → at::_ops::op::call     生成的 C++ 包装       验证：torchgen/gen.py:667（生成器原文）/ build 后 build/aten/src/ATen/ops/op.h
- → Dispatcher 查表                              验证：TORCH_SHOW_DISPATCH_TRACE=1（debug build）/ gdb break
-   ├─ Autograd key 包装   生成的 backward 记录  验证：profiler 事件树层级 / VariableType*.cpp（build 后）
-   └─ 注册表项 → kernel   m.impl("aten::op", …) 验证：build 后 rg "aten::op" build/aten/src/ATen/Register*.cpp
- → at::native::xxx        kernel 本体           验证：rg "Tensor xxx" aten/src/ATen/native/
+Python t.op(...) / torch.op(...)
+ → THPVariable_op / torch.op 绑定     gen_python_functions.py 生成，归属文件按上表判定
+                                      验证：build 后 rg THPVariable_op torch/csrc/autograd/generated/
+ → at::_ops::op::call     C++ 包装    torchgen/gen.py:667 生成（body=findSchemaOrThrow+op.call）
+                                      验证：build 后 build/aten/src/ATen/ops/op_ops.h
+ → Dispatcher 查表                     验证：TORCH_SHOW_DISPATCH_TRACE=1（debug build）/ gdb break
+   ├─ Autograd key 包装   gen_autograd.py 生成（VariableType*.cpp），记 backward/view
+   │                     验证：profiler 事件树层级
+   └─ 注册表项 → kernel   torchgen 生成（Register{Key}.cpp 里的 m.impl(...)）
+                          验证：build 后 rg "aten::op" build/aten/src/ATen/Register*.cpp
+ → at::native::xxx        kernel 本体（手写，源码自带）
+                          验证：rg "Tensor xxx" aten/src/ATen/native/
  → kernel 内部            直连 native::yyy 或再过表 at::zzz
-                                               验证：profiler 事件树——出现 aten::zzz=过表；没出现=直连
+                          验证：profiler 事件树——出现 aten::zzz=过表；没出现=直连
 ```
 
 # 三、七步 SOP（不凭先验经验的推导流程）

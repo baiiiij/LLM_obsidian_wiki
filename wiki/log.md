@@ -225,6 +225,19 @@
 
 **更新页面**：[[aten算子调用链定位方法论]] 第二节新增"双层模型""注册表项""完整分析链路（每层附验证手段）"三小节；修正两处易误读表述；reshape 在 2.12 yaml:5141（Composite）、view yaml:8422（有 dispatch 段）、_reshape_alias yaml:5157（有 dispatch 段）。
 
+## [2026-07-31] update | 代码生成地图：新算子该找哪个绑定文件的判定规则
+
+用户要求：完整链路之前先讲 PyTorch 代码生成机制——哪个生成器读什么输入、产出哪些文件/函数，文件对应关系；目标是拿到任意新算子（torch.Tensor 方法或 torch.xxx）都能自己定位入口文件。
+
+**更新页面**：[[aten算子调用链定位方法论]] 新增"代码生成地图"小节（置于完整链路图之前），链路图每层标注生成器归属。
+
+**关键知识点**（均对照本机 2.14 源码树核实）：
+- 唯一输入 yaml，两个字段决定绑定形态：`variants: function, method`（⇒ torch.op / t.op）、`python_module: nn`（⇒ torch._C._nn）。
+- 三个生成器分工：torchgen/gen.py → per-op 头（ops/{op}_ops.h）、Functions、TensorBody/TensorMethods、Register{Key}.cpp 注册表项；gen_python_functions.py → python_variable_methods.cpp（方法）/ python_torch_functions.cpp（命名空间函数）/ python_nn 等分模块；gen_autograd.py → VariableType*.cpp；gen_pyi.py → .pyi 死路。
+- 判定规则原文在 gen_python_functions.py:233-237：`is_method = python_module is None and Variant.method in variants`。
+- 挂载点：t.op → python_variable.cpp:3887 variable_methods[]；torch.op → python_torch_functions_manual.cpp:539+ gatherTorchFunctions_0/1/2()。
+- 特例表：F.op 先看 torch/nn/functional.py（有 Python 包装）；torch.save/compile 非 aten 算子（纯 Python，getsource 直接可读）。
+
 ## [2026-07-31] update | 为什么会有 dispatcher：设计动机补全
 
 用户反馈"回答片面"：只讲了是什么（clone 过表/reshape 不过），没讲为什么——为什么 clone 会 dispatch、dispatch 与内部调用的本质区别、为什么有 dispatch 这个概念。
