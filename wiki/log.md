@@ -144,3 +144,16 @@
 - yaml 4 个 flatten overload 按参数类型匹配：int → using_ints；Dimname 三个属 named tensor 特性
 
 **核心原则**：能观测的不猜测（profiler/trace 拿 ground truth），能匹配的不背诵（参数类型对 overload），yaml 是唯一地图。
+
+## [2026-07-31] update | 方法论页重写：10 个追问逐条展开 + 版本基准切到 2.12
+
+用户提出 10 个追问（profiler 原理、activities 含义、为何能看到 dispatch、dispatch vs 直接调用、yaml 名字是否总一致、TORCH_SHOW_DISPATCH_TRACE、rg 是什么、胶水生成细节、版本用 2.12）。整体重写 [[aten算子调用链定位方法论]]。
+
+**2.12 在线核对**（GitHub release/2.12）：flatten.using_ints 在 yaml:2702（无 dispatch 段）；flatten impl TensorShape.cpp:4178；reshape_symint :2058；alias_with_sizes_and_strides :1992；_reshape_alias :2168；computeStride TensorUtils.cpp:327。[[pytorch-flatten-调用链路定位]] 行号已全部切换为 2.12。
+
+**新实测/新发现**：
+- **TORCH_SHOW_DISPATCH_TRACE 在官方 release 版被编译掉**：打印代码包在 `#if defined(HAS_TORCH_SHOW_DISPATCH_TRACE) || !defined(NDEBUG)`（Dispatcher.h），pip 版实测无输出；仅 debug 构建可用
+- profiler 可见性原理：RecordFunction 钩子埋在 Dispatcher.h（callWithDispatchKeySlowPath），故 native:: 直接调用对 profiler 不可见——profiler 事件流 ≈ 过 dispatcher 的算子清单
+- 无 GPU 机器请求 CUDA activity：仅 warning "CUDA is not available, disabling CUDA profiling"，不报错
+- 名字不一致实例（实测）：a+a→aten::add；torch.concat→aten::concat→aten::cat；a@a→aten::matmul→aten::mm
+- 胶水链四文件闭环：templates/python_variable_methods.cpp（${py_methods} 占位）→ gen_python_functions.py → generated/python_variable_methods.cpp → python_variable.cpp:3887/3913 挂载到 torch._C.TensorBase

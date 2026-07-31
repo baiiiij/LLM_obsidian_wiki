@@ -11,7 +11,7 @@ tags: [pytorch, aten, dispatcher, view, codegen]
 
 在 IDE 里对 `tensor.flatten()` 点跳转到 `torch/_C/__init__.pyi`，只能看到 `@overload` 类型存根，看不到实现。如何找到完整调用链路？底层怎么 dispatch？什么情况下复制数据、什么情况下只改 metadata？
 
-> 本文所有路径与行号对照 `/home/admin/code/LLM/source_code/pytorch`（version.txt = 2.14.0a0）实测；2.12 结构一致，行号可能略有偏移。
+> **版本基准：本文行号对照 GitHub `pytorch/pytorch` 的 `release/2.12` 分支在线核对**。与本地 2.14.0a0 树结构一致，仅行号略有偏移。
 
 # 〇、先建立地图：PyTorch 代码的三个世界
 
@@ -31,7 +31,7 @@ tags: [pytorch, aten, dispatcher, view, codegen]
 aten/src/ATen/native/native_functions.yaml
 ```
 
-第 2641 行：
+第 2702 行：
 
 ```yaml
 - func: flatten.using_ints(Tensor(a) self, int start_dim=0, int end_dim=-1) -> Tensor(a)
@@ -63,15 +63,15 @@ t.flatten(0, 1)                                    ← Python
 │     （注册表本身也是生成的：build/aten/src/ATen/RegisterCompositeImplicitAutograd.cpp）
 │
 ├─ ④ at::native::flatten                          [源码自带] ← 真正的逻辑从这里开始
-│     aten/src/ATen/native/TensorShape.cpp:4121
-│     拼出目标 shape 后【直接函数调用】native::reshape_symint（同文件:1976）
+│     aten/src/ATen/native/TensorShape.cpp:4178
+│     拼出目标 shape 后【直接函数调用】native::reshape_symint（同文件:2058）
 │     ⚠️ 这一步是 C++ 直接调用，不再走 dispatcher！
 │
 └─ ⑤ view / copy 分水岭：reshape_symint           [源码自带]
-      aten/src/ATen/native/TensorShape.cpp:1976
+      aten/src/ATen/native/TensorShape.cpp:2058
 ```
 
-# 二、第四层：flatten 本体（TensorShape.cpp:4121，源码自带）
+# 二、第四层：flatten 本体（TensorShape.cpp:4178，源码自带）
 
 ```cpp
 Tensor flatten(const Tensor& self, int64_t start_dim, int64_t end_dim) {
@@ -92,7 +92,7 @@ Tensor flatten(const Tensor& self, int64_t start_dim, int64_t end_dim) {
 
 所以 flatten 自己**没有任何复制/view 判断**，它只是"算目标 shape"，决策全部交给 reshape。这也解释了为什么 yaml 里没有 dispatch 段——它根本不需要 per-device kernel。
 
-# 三、第五层：view 还是 copy？（TensorShape.cpp:1976，源码自带）
+# 三、第五层：view 还是 copy？（TensorShape.cpp:2058，源码自带）
 
 ```cpp
 Tensor reshape_symint(const Tensor& self, c10::SymIntArrayRef proposed_shape) {
@@ -115,7 +115,7 @@ Tensor reshape_symint(const Tensor& self, c10::SymIntArrayRef proposed_shape) {
 
 ## A-1. 快路径 `view_symint` / A-2. `_reshape_alias` —— 只改 metadata
 
-`_reshape_alias`（TensorShape.cpp:2086）调 `alias_with_sizes_and_strides`（**TensorShape.cpp:1945**），它的函数体就是"只改 metadata"这句话的字面实现：
+`_reshape_alias`（TensorShape.cpp:2168）调 `alias_with_sizes_and_strides`（**TensorShape.cpp:1992**），它的函数体就是"只改 metadata"这句话的字面实现：
 
 ```cpp
 Tensor self_ = at::detail::make_tensor<TensorImpl>(
@@ -132,7 +132,7 @@ return self_;
 
 `self.clone(...)` 是一次新的 dispatcher 调用（`aten::clone`），落到 device 专属 copy kernel（CPU memcpy / CUDA copy kernel）。克隆出一块连续的新内存后，再对它 `_unsafe_view`——连续张量必然可以 view。
 
-# 四、computeStride 的判断条件（TensorUtils.cpp:325 起，源码自带）
+# 四、computeStride 的判断条件（TensorUtils.cpp:327 起，源码自带）
 
 `at::detail::computeStride`（三个重载在 TensorUtils.cpp:409/417/425）回答一个问题：**"新 shape 能不能用旧的 stride 体系表达出来？"** 算法是从最后一维往前走的双指针：
 
@@ -171,9 +171,9 @@ print(prof.key_averages().table())
 
 | 文件（相对 pytorch 源码树根） | 存在时机 | 角色 |
 |---|---|---|
-| `aten/src/ATen/native/native_functions.yaml` | 源码自带 | 算子 schema 唯一原点（flatten 在 :2641） |
-| `aten/src/ATen/native/TensorShape.cpp` | 源码自带 | flatten :4121 / reshape_symint :1976 / _reshape_alias :2086 / alias_with_sizes_and_strides :1945 |
-| `aten/src/ATen/TensorUtils.cpp` | 源码自带 | computeStride_impl :325，重载 :409/417/425 |
+| `aten/src/ATen/native/native_functions.yaml` | 源码自带 | 算子 schema 唯一原点（flatten 在 :2702） |
+| `aten/src/ATen/native/TensorShape.cpp` | 源码自带 | flatten :4178 / reshape_symint :2058 / _reshape_alias :2168 / alias_with_sizes_and_strides :1992 |
+| `aten/src/ATen/TensorUtils.cpp` | 源码自带 | computeStride_impl :327，重载 :409/417/425 |
 | `aten/src/ATen/core/dispatch/Dispatcher.h` | 源码自带 | dispatcher 本体 |
 | `tools/pyi/gen_pyi.py` | 源码自带 | 生成你点进去看到的 .pyi |
 | `tools/autograd/gen_python_functions.py` | 源码自带 | 生成 Python 绑定的脚本 |
@@ -190,7 +190,7 @@ print(prof.key_averages().table())
 
 # 七、一句话总结
 
-> flatten 本身只是"算 shape"（TensorShape.cpp:4121），决策在 reshape（:1976）：`computeStride` 能算出新 strides 就 `_reshape_alias` 共享 storage 只改 metadata；算不出就 `clone` 连续化再 view，clone 才是唯一真正搬数据的地方。
+> flatten 本身只是"算 shape"（TensorShape.cpp:4178），决策在 reshape（:2058）：`computeStride` 能算出新 strides 就 `_reshape_alias` 共享 storage 只改 metadata；算不出就 `clone` 连续化再 view，clone 才是唯一真正搬数据的地方。
 
 ## 相关页面
 
