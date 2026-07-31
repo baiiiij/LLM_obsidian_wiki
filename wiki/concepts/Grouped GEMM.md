@@ -2,7 +2,7 @@
 type: concept
 title: Grouped GEMM（分组矩阵乘）
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31
 sources: ["raw/sources/moe_align_block_size交互讲解.html"]
 tags: [moe, gemm, kernel, 算子层]
 ---
@@ -31,7 +31,8 @@ GEMM kernel 以固定块长 `BLOCK_M`（通常 16/32/64）为粒度工作，因�
 
 ## 消费示意（[[Triton]]）
 
-见 [[moe_align_block_size-交互式详解#消费方式（Triton 伪代码）|来源页的消费伪代码]]。
+- 逐行注释版伪代码 + 访存特征：[[moe_align_block_size#七、后置计算：fused_moe_kernel 怎么消费布局（对齐模式）|概念页 §7]]
+- 另见 [[moe_align_block_size-交互式详解#消费方式（Triton 伪代码）|来源页的消费伪代码]]。
 
 ## 参见
 
