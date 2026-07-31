@@ -169,7 +169,9 @@ at::clone(t)  ← 调用方：任何 C++ 代码（你写的扩展 / 生成的 Te
 
 一句话：**dispatch = 按 tensor 属性动态路由到正确实现 + 触发 autograd/profiler/compile 等所有横切机制；直接调用 = 静态确定的普通函数跳转，什么都不触发。**
 
-## 为什么 clone 会 dispatch、reshape 不会？（机械层面）
+## 为什么 clone 这一跳会 dispatch、flatten→reshape 这一跳不会？（机械层面）
+
+> ⚠️ **先澄清一个容易误读的表述**：本节说的"reshape 不过 dispatcher"**仅指 flatten→reshape 这个 kernel 内部跳转**。`aten::reshape` 作为算子本身照样在 dispatcher 表里注册了，你从 Python 调 `t.reshape(...)` 时**照常 dispatch**（见下一节"双层模型"的实测）。
 
 dispatch 不是算子的"属性"，而是**你调用的那个函数，函数体里有没有查表代码**。看两者各自进入的函数体：
 
@@ -202,7 +204,7 @@ C++ 原生的方案都不够：
 
 外加两个杀手级收益：
 
-1. **横切机制的统一拦截点**：profiler 的 RecordFunction、dispatch trace、torch.compile 的拦截全挂在"查表"这一步——一次插桩覆盖全部 2000+ 算子。不过 dispatcher 的调用它们全看不见（这就是 profiler 里没有 `aten::reshape` 的原因）。
+1. **横切机制的统一拦截点**：profiler 的 RecordFunction、dispatch trace、torch.compile 的拦截全挂在"查表"这一步——一次插桩覆盖全部 2000+ 算子。不过 dispatcher 的调用它们全看不见（flatten 链路的 profiler 里没有 `aten::reshape` 就是这个原因；但直接从 Python 调 `t.reshape()` 时 `aten::reshape` 照常出现，见下文"双层模型"）。
 2. **autograd 不用逐算子手写**：Autograd key 的优先级高于后端 key，注册一份包装就自动给所有算子套上 backward 记录。
 
 ## 选择的判断准则
@@ -211,6 +213,68 @@ C++ 原生的方案都不够：
 
 - clone：拷贝实现按设备路由 → 过表。
 - reshape 的 shape 逻辑：纯整数运算，只碰 sizes/strides 元数据，CPU/CUDA 一字不差 → 直连（过表是纯浪费：dispatch 有开销——算 key、哈希查找、间接跳转；且 flatten 已过 autograd 层，再过表会重复记录 view）。
+
+## 双层模型：算子 vs kernel（解开"reshape 到底有没有 dispatch"的关键）
+
+必须区分同名的两个东西：
+
+| 层 | 例子 | 是什么 |
+|---|---|---|
+| **算子（op）** | `aten::reshape` | dispatcher 表里的一项，有 schema、有注册表项。**从 Python / `at::` 包装进入时永远过表** |
+| **kernel** | `at::native::reshape_symint` | 注册在表里的那个函数，查表的**终点**，逻辑本体 |
+
+"dispatch"发生在**到达 kernel 之前**：包装 → 查表 → kernel。kernel 自己当然"不 dispatch"——它是被查表找到的目的地。kernel 内部再调别人时，作者二选一：过表（`self.view(...)`/`at::clone(...)`）或直连（`native::yyy(...)`）。
+
+实测对照（pip torch 2.12，CPU）：
+
+```
+t.reshape(6, 4)   → profiler: aten::reshape → aten::view   ← reshape 作为算子，dispatch 了！
+t.flatten(0, 1)   → profiler: aten::flatten → aten::view   ← 没有 aten::reshape：
+                                                             flatten 的 kernel 直连 reshape 的 kernel，
+                                                             跳过了 reshape 作为算子的那次查表
+```
+
+所以完整回答"reshape 从 Python 到 C++ 的链路"：
+
+```
+t.reshape(6, 4)  [Python]
+① THPVariable_reshape                （build 生成的 Python 绑定）
+② at::_ops::reshape::call            （build 生成的包装，body = findSchemaOrThrow + op.call）
+③ Dispatcher 查表 "aten::reshape"
+   ├─ Autograd/ADInplaceOrView 包装   （生成的 VariableType kernel，记 view 关系供 backward）
+   ├─ redispatch 摘掉 autograd keys
+   └─ CompositeImplicitAutograd 注册项 → at::native::reshape_symint
+      （2.12 yaml:5141 reshape 无 dispatch 段 = Composite，所有后端共享这一个 kernel）
+④ at::native::reshape_symint          （TensorShape.cpp:2058，kernel 本体）
+⑤ 内部：is_contiguous 快路径 → self.view_symint(shape) —— 又一次 op 级 dispatch
+   → 命中 aten::view 的 kernel（yaml:8422 有 dispatch 段）→ alias 共享 storage
+```
+
+## SOP 省略的一环：注册表项（算子名 → kernel 的绑定证据）
+
+七步 SOP（profiler → yaml → rg → `at::native::xxx`）找到的 kernel **是合理且完整的终点**——dispatch 发生在到达它之前。但"算子名具体绑定到哪个函数"这一步，SOP 是靠 yaml 规则**推断**的，其直接证据是**注册表项**：
+
+```bash
+# build 之后（本机源码树未编译则无此目录）：
+rg "aten::reshape" build/aten/src/ATen/RegisterCompositeImplicitAutograd.cpp
+# 会看到类似：m.impl("aten::reshape", TORCH_FN(at::native::reshape_symint));
+```
+
+这一行 `m.impl(...)` 就是 dispatcher 表里的那一项——op 名（键）→ kernel 函数指针（值）。它是 SOP 第 4→5 步之间被黑盒化的拼图；不看它不影响找到实现，看了它链路才算"每一环都有实证"。
+
+## 完整分析链路（任一算子通用，每层附验证手段）
+
+```
+Python t.op(...)
+ → THPVariable_op         生成的 Python 绑定    验证：build 后 rg THPVariable_op torch/csrc/autograd/generated/
+ → at::_ops::op::call     生成的 C++ 包装       验证：torchgen/gen.py:667（生成器原文）/ build 后 build/aten/src/ATen/ops/op.h
+ → Dispatcher 查表                              验证：TORCH_SHOW_DISPATCH_TRACE=1（debug build）/ gdb break
+   ├─ Autograd key 包装   生成的 backward 记录  验证：profiler 事件树层级 / VariableType*.cpp（build 后）
+   └─ 注册表项 → kernel   m.impl("aten::op", …) 验证：build 后 rg "aten::op" build/aten/src/ATen/Register*.cpp
+ → at::native::xxx        kernel 本体           验证：rg "Tensor xxx" aten/src/ATen/native/
+ → kernel 内部            直连 native::yyy 或再过表 at::zzz
+                                               验证：profiler 事件树——出现 aten::zzz=过表；没出现=直连
+```
 
 # 三、七步 SOP（不凭先验经验的推导流程）
 

@@ -213,6 +213,18 @@
 
 **修正**：[[aten算子调用链定位方法论]] 示意图注释改为"任何 C++ 代码（你写的扩展 / 生成的 TensorBody 包装 / PyTorch 自己的 kernel）"并加注：flatten 链路中 clone 的调用方是 PyTorch kernel 作者（`reshape_symint` 内的 `self.clone(...)`，2.12 TensorShape.cpp:2104）；判别"谁调了它"靠 profiler 事件树父子关系，不是靠调用形式。
 
+## [2026-07-31] update | 双层模型澄清：aten::reshape 从 Python 进入时照样 dispatch
+
+用户三连问：①reshape 没有 dispatch 的话，从 Python 到 C++ 的链路是什么、怎么自己分析？②SOP 找到的 at::native::xxx 本身没有 dispatch，这是合理链路吗？③是不是解释时省略了一步？要完整分析链路。
+
+**核心澄清（双层模型）**：算子（aten::reshape，dispatcher 表里的项）与 kernel（at::native::reshape_symint，查表终点）是两层。dispatch 发生在到达 kernel 之前；之前"reshape 不过 dispatcher"的表述仅指 flatten→reshape 的 kernel 内部直连。
+
+**实测对照**（pip torch 2.12 CPU）：`t.reshape(6,4)` → profiler 有 `aten::reshape → aten::view`（dispatch 了！）；`t.flatten(0,1)` → `aten::flatten → aten::view`（无 aten::reshape，内部直连）。一个实验同时证明两层。
+
+**SOP 省略的一环**：注册表项 `m.impl("aten::reshape", TORCH_FN(at::native::reshape_symint))`（build 后 `rg "aten::reshape" build/aten/src/ATen/RegisterCompositeImplicitAutograd.cpp`）是"算子名→kernel"绑定的直接证据；SOP 靠 yaml 规则推断这步，看它则每环有实证。
+
+**更新页面**：[[aten算子调用链定位方法论]] 第二节新增"双层模型""注册表项""完整分析链路（每层附验证手段）"三小节；修正两处易误读表述；reshape 在 2.12 yaml:5141（Composite）、view yaml:8422（有 dispatch 段）、_reshape_alias yaml:5157（有 dispatch 段）。
+
 ## [2026-07-31] update | 为什么会有 dispatcher：设计动机补全
 
 用户反馈"回答片面"：只讲了是什么（clone 过表/reshape 不过），没讲为什么——为什么 clone 会 dispatch、dispatch 与内部调用的本质区别、为什么有 dispatch 这个概念。

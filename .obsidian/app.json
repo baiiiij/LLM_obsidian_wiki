@@ -3,5 +3,6 @@
   "newLinkFormat": "shortest",
   "useMarkdownLinks": false,
   "alwaysUpdateLinks": true,
-  "showUnsupportedFiles": true
+  "showUnsupportedFiles": true,
+  "defaultViewMode": "preview"
 }
