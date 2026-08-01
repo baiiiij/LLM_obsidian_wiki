@@ -7,48 +7,41 @@ updated: 2026-07-31
 # Index — 内容目录
 
 > 每次 ingest 后更新本文件。查询时先读这里定位页面。
-> 格式：页面链接 + 一句话摘要。
+> 组织方式：**按知识大类分区**——每个大类有一个粘合页（hub，含阅读顺序）+ 成员清单。
 
-## Entities（实体）
+## PyTorch 源码机制 — 粘合页：[[PyTorch 源码机制]]
 
-- [[vLLM]] — 主流 LLM 推理框架；v0.20.2 MoERunner + 模块化 kernel 架构、TP/SP/EP/DP/PCP 通信节奏
-- [[DeepSeek]] — MoE 架构大模型系列，DP+EP 混合部署的典型代表
-- [[Triton]] — Python 风格 GPU 算子 DSL，vLLM MoE kernel 的实现语言
-- [[FlagGems]] — 智源 FlagOS 的 Triton 算子库：运行时覆盖 aten kernel（torch.library 改表，不截断 dispatch）；覆盖的三条边界
+算子从 Python 到 device kernel 的全过程：代码生成 → 加载注册 → 运行查表 → 运行时覆盖。
 
-## Concepts（概念）
+- [[PyTorch-ATen-Dispatcher]] — 机制：双层模型（算子 vs kernel）、过表 vs 直连、注册表结构与运行时覆盖
+- [[PyTorch-代码生成管线]] — 文件地图：yaml → 三个生成器 → 产物归属；新算子绑定判定；Register 三件套与分片
+- [[PyTorch-源码分析工具箱]] — 工具：profiler（表格读法/activities）/ dispatch trace（NDEBUG 坑）/ rg / gdb
+- [[aten算子调用链定位方法论]] — 问答：不凭先验经验的七步 SOP + 完整分析链路（含 ④ 断点走法）
+- [[pytorch-flatten-调用链路定位]] — 问答：flatten 实例（2.12 行号），computeStride 判定 view/copy
 
-- [[MoE]] — 混合专家模型：路由 + top-k 稀疏激活，决定底层算子形态；含 Shared/Latent/SP/EPLB 扩展
-- [[LLM 前向计算]] — 从零背景页：token/hidden states、Transformer 层（attention + FFN = 两次 GEMM + 激活）、GEMM 的计算与访存、权重复用是 FFN 快慢核心指标；各算子页共同的前置背景
-- [[moe_align_block_size]] — vLLM MoE 布局整理算子：朴素缺点 → vLLM 整体优化与融合点 → 三段式前置计算 → 后置 grouped GEMM → naive/native 两条下游路径对照（背景另文：[[LLM 前向计算]]）
-- [[Grouped GEMM]] — MoE 的核心计算形态：同专家 token 共享权重，按块复用
-- [[专家并行 EP]] — 专家切分到多卡；expert_map 与 -1 跳过机制；naive dispatch 通信
-- [[数据并行 DP]] — token 切分到多卡；All-to-All Dispatch/Combine 流水线
-- [[CUDA Graph]] — 定形约束与"形状恒定化"应对思路
-- [[Shared Experts]] — 模型架构级 dense 专家，分担通用知识与梯度稳定性
-- [[Latent MoE]] — 潜空间降维-升维投影，减少 gate + expert 计算量
-- [[序列并行 SP]] — 消除 TP 下 gate 冗余：token 切分 → 计算 → all-gather 拼回
-- [[EPLB]] — 专家并行负载均衡：冗余专家、逻辑/物理双层 ID、后台 rebalance
-- [[All-to-All]] — 集合通信原语对比（All-Reduce/All-Gather/Reduce-Scatter/All-to-All）
-- [[Context Parallel]] — 上下文并行（PCP/DCP）：超长序列切段的并行策略
-- [[PyTorch-ATen-Dispatcher]] — aten 算子路由机制：双层模型（算子 vs kernel）、过表 vs 直连、注册表结构与运行时覆盖
-- [[PyTorch-代码生成管线]] — yaml → 三个生成器 → 产物的文件地图；新算子绑定归属判定；Register 三件套与分片；pip 自带头文件实证
-- [[PyTorch-源码分析工具箱]] — profiler（表格读法/activities）/ TORCH_SHOW_DISPATCH_TRACE（NDEBUG 坑）/ rg / gdb 详解
+## vLLM 推理框架 — 粘合页：[[vLLM 推理框架]]
 
-## Sources（来源摘要）
+MoE token 在 vLLM 里经过哪些模块、算子、卡。
 
-- [[moe_align_block_size-交互式详解]] — vLLM `moe_align_block_size` 交互式讲解（基础版 / EP / DP 三场景）
-- [[moe_align_block_size-代码路径]] — v0.20.2 从 Qwen3MoeForCausalLM 到 kernel 的完整代码分支路径（五章 + 12 项决策表）
+- [[vLLM]] — 实体：v0.20.2 MoERunner + 模块化 kernel 架构、TP/SP/EP/DP/PCP 通信节奏
+- [[moe_align_block_size]] — 概念：MoE 布局整理算子（前置计算三段式 → naive/native 捷径）
+- [[Grouped GEMM]] — 概念：MoE 核心计算形态，同专家 token 共享权重按块复用
+- 并行策略：[[专家并行 EP]] / [[数据并行 DP]] / [[序列并行 SP]] / [[Context Parallel]] / [[EPLB]] / [[All-to-All]] / [[CUDA Graph]]
+- 来源摘要：[[moe_align_block_size-代码路径]] / [[moe_align_block_size-交互式详解]]
 
-## Queries（问答沉淀）
+## FlagGems（Triton 算子库）— 入口：[[FlagGems]]
 
-- [[pytorch-flatten-调用链路定位]] — 对照 2.12 源码：flatten(TensorShape.cpp:4178)→reshape(:2058)→computeStride 判定 view/copy；含文件速查表
-- [[aten算子调用链定位方法论]] — 不凭先验经验的七步 SOP + 完整分析链路（含 ④ 断点走法）；概念与工具拆为独立页
+- [[FlagGems]] — 实体：智源 FlagOS 的 Triton 算子库；torch.library 运行时覆盖 aten kernel（改表不截断 dispatch）；覆盖的三条边界
 
-## Synthesis（综合分析）
+## LLM 与 MoE 模型基础
 
-_（暂无）_
+- [[LLM 前向计算]] — 概念：从零背景页（token/FFN/GEMM/访存/权重复用），各算子页共同前置
+- [[MoE]] — 概念：混合专家模型入口（路由 + top-k；含 Shared/Latent/SP/EPLB 扩展）
+- [[Shared Experts]] / [[Latent MoE]] — 概念：MoE 架构扩展
+- [[DeepSeek]] — 实体：MoE 架构大模型系列，DP+EP 混合部署典型负载
+- [[Triton]] — 实体：Python 风格 GPU 算子 DSL（vLLM MoE kernel 与 FlagGems 的实现语言）
 
-## Comparisons（对比）
+## 元页面
 
-_（暂无）_
+- [[overview]] — 全局摘要（主题地图、已覆盖 vs 空白、深挖方向）
+- [[log]] — 操作日志（append-only）

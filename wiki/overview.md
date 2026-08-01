@@ -12,7 +12,14 @@ updated: 2026-07-31
 
 - 目标与范围：见 [[purpose]]（LLM 算子开发，五层结构）
 - 来源数量：2
-- 页面数量：26（4 实体 + 16 概念 + 2 来源摘要 + 2 问答 + 1 索引 + 1 本页）
+- 页面数量：28（4 实体 + 16 概念 + 2 来源摘要 + 2 问答 + 2 粘合页 + 1 索引 + 1 本页）
+
+## 大类导航
+
+- **PyTorch 源码机制** — 粘合页 [[PyTorch 源码机制]]：代码生成管线 / ATen Dispatcher / 源码分析工具箱 / 定位方法论 / flatten 实例
+- **vLLM 推理框架** — 粘合页 [[vLLM 推理框架]]：vLLM / moe_align_block_size / Grouped GEMM / 并行策略网 / 来源页
+- **FlagGems** — 入口 [[FlagGems]]（目前单页）
+- **LLM 与 MoE 模型基础** — LLM 前向计算 / MoE / Shared Experts / Latent MoE / DeepSeek / Triton
 
 ## 主题地图
 

@@ -304,3 +304,17 @@
 - [[pytorch-flatten-调用链路定位]] — title 修正为 2.12；相关页面接入新页
 
 **同步**：[[index]]（+3 页、修正 flatten 过时摘要）、[[overview]]（26 页：4 实体 + 16 概念 + 2 来源 + 2 问答 + 2 元；框架层/算子层状态更新）。全部 wikilink 已脚本验证零断链。
+
+## [2026-07-31] reorg | 引入 hub（粘合页）结构：index 按知识大类重组
+
+用户反馈：拆页后仍缺条理——期望知识库按大类组织（PyTorch / FlagGems / vLLM 等），每个大类有一个"粘合文档"承载阅读顺序与逻辑，index 围绕大类而非页面类型。
+
+**结构变更**：
+- 新增页面类型 `hub`（大类粘合页/MOC）与目录 `wiki/hubs/`，schema.md 已更新（类型列表 + 目录树 + index 组织约定"按知识大类分区"）
+- 新建 [[PyTorch 源码机制]]（hub）：主线"算子一生四阶段"（代码生成→加载注册→运行查表→运行时改表）+ 推荐阅读顺序（flatten 实例→Dispatcher→管线→工具箱→SOP→FlagGems）+ 按需求速查表
+- 新建 [[vLLM 推理框架]]（hub）：推荐阅读顺序（LLM 前向计算→MoE→vLLM 总览→代码路径→moe_align→Grouped GEMM→交互详解）+ 并行策略网按主题速查 + 与其他大类的接口
+- FlagGems 大类目前单页，[[FlagGems]] entity 页即入口，不另建空 hub
+
+**index.md 重构**：从"按页面类型平铺（Entities/Concepts/Queries...）"改为"按知识大类分区"——PyTorch 源码机制 / vLLM 推理框架 / FlagGems / LLM 与 MoE 模型基础 / 元页面，每类标注粘合页。
+
+**同步**：[[overview]]（28 页 + 大类导航节）。全部 wikilink 脚本验证零断链。

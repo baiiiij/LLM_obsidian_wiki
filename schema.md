@@ -13,9 +13,10 @@ vault/
 │   ├── sources/        # 导入的文档：文章、论文、剪藏
 │   └── assets/         # 图片等附件（Obsidian 附件目录）
 └── wiki/               # LLM 生成与维护的 wiki（LLM 全权负责）
-    ├── index.md        # 内容目录（每次 ingest 必更新）
+    ├── index.md        # 内容目录（按知识大类组织，每次 ingest 必更新）
     ├── log.md          # 操作日志（append-only）
     ├── overview.md     # 全局摘要（每次 ingest 后刷新）
+    ├── hubs/           # 大类粘合页（MOC）：每个知识大类一个导航页，含阅读顺序
     ├── entities/       # 实体页：人物、组织、模型、产品
     ├── concepts/       # 概念页：理论、方法、技术
     ├── sources/        # 来源摘要页：每个 raw 来源对应一页
@@ -30,7 +31,7 @@ vault/
 
 ```yaml
 ---
-type: entity | concept | source | query | synthesis | comparison
+type: hub | entity | concept | source | query | synthesis | comparison
 title: 页面标题
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
@@ -39,6 +40,7 @@ tags: [相关标签]
 ---
 ```
 
+- **hub**：知识大类的粘合页（MOC），含大类范围、推荐阅读顺序、成员页清单；每个大类一个（如 PyTorch 源码机制、vLLM 推理框架）
 - **entity**：具体的人、组织、模型、产品（如 GPT-4、Andrej Karpathy、OpenAI）
 - **concept**：抽象的理论、方法、技术（如 Transformer、RLHF、思维链）
 - **source**：对某个 raw 来源的摘要页，文件名与来源对应
@@ -80,6 +82,7 @@ tags: [相关标签]
 
 - **语言**：wiki 内容用中文；专有名词保留英文原文
 - **链接**：页面间一律用 `[[wikilink]]` 互相引用，这是知识图谱的边
+- **index 组织方式**：按知识大类分区（每个大类 = 粘合页 + 成员清单），不按页面类型平铺
 - **raw 不可变**：绝不修改 `raw/` 下的文件
 - **来源可追溯**：每个 wiki 页的 frontmatter `sources[]` 必须记录贡献来源
 - **人类策展，LLM 维护**：用户负责选来源、提问题、定方向；LLM 负责所有写作、交叉引用和簿记
