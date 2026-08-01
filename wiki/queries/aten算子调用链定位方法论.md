@@ -13,9 +13,15 @@ tags: [pytorch, aten, dispatcher, codegen, 方法论]
 
 > **版本基准：本文所有源码引用以 GitHub `pytorch/pytorch` 的 `release/2.12` 分支为准**（已逐文件在线核对）。本机实验只跑 CPU 上的 Python 侧观测（观测结论与有无 GPU 无关），GPU 相关行为以源码为准并注明。
 
+**前置阅读**（本页只讲操作流程，概念与工具详解已拆出）：
+
+- [[PyTorch-ATen-Dispatcher]] — 核心概念：双层模型（算子 vs kernel）、过表 vs 直连、注册表结构
+- [[PyTorch-代码生成管线]] — 文件地图：每个文件由谁生成、生成到哪、新算子找哪个绑定文件
+- [[PyTorch-源码分析工具箱]] — profiler / dispatch trace / rg / gdb 的用法与坑
+
 # 〇、先纠正心智模型：分支存在，但不在 Python 层
 
-你预期的流程（Python 函数体里写分支）对**少数**算子成立，但对绝大多数 aten 算子不成立。原因：PyTorch 有 2000+ 算子，每个都要配 Python 绑定、C++ 方法、autograd、各后端 kernel、类型存根——全手写不可维护，于是采用 **schema 驱动代码生成**：`native_functions.yaml` 是唯一事实来源，Python 层只是生成的薄壳（解析参数 → 扔进 dispatcher），没有业务逻辑。
+你预期的流程（Python 函数体里写分支）对**少数**算子成立，但对绝大多数 aten 算子不成立。原因：PyTorch 采用 **schema 驱动代码生成**（详见 [[PyTorch-代码生成管线]]），Python 层只是生成的薄壳（解析参数 → 扔进 dispatcher），没有业务逻辑。
 
 你期待的"条件分支"搬到了两个地方：
 
@@ -24,353 +30,7 @@ tags: [pytorch, aten, dispatcher, codegen, 方法论]
 | ① Dispatcher（查表，自动） | tensor 的设备/requires_grad 等属性 | CPU 还是 CUDA？要不要包 autograd？ |
 | ② C++ kernel 内部的 if/else | 数据布局等运行时条件 | `computeStride` 成功 → view；失败 → clone |
 
-# 一、工具箱详解（先把 SOP 里用到的每个工具讲透）
-
-## 1.1 torch.profiler 是什么
-
-`torch.profiler` 是 PyTorch 自带的**插桩式性能分析器**。`profile` 是上下文管理器，`ProfilerActivity` 是指定"采集哪类事件"的枚举：
-
-```python
-from torch.profiler import profile, ProfilerActivity
-with profile(activities=[ProfilerActivity.CPU]) as prof:   # 在 with 块内开启采集
-    t.flatten(0, 1)                                        # 块内所有算子调用被记录
-print(prof.key_averages().table())                         # 汇总表
-# prof.events() 可以拿到逐条事件流
-```
-
-它的数据来源（重点）：**dispatcher 的 C++ 代码里埋了观测钩子**。每次有算子经过 dispatcher，调用前后会触发一对 `RecordFunction` 回调（2.12 源码证据：`aten/src/ATen/core/dispatch/Dispatcher.h` 中 `callWithDispatchKeySlowPath` / `step_callbacks` 逻辑）。profiler 启动时注册一个全局回调，把每条事件的**算子名（schema 名，如 aten::flatten）**和耗时收集起来。
-
-## 1.2 为什么是 `ProfilerActivity.CPU`，填别的会怎样
-
-`ProfilerActivity` 的取值（2.12）：`CPU`、`CUDA`、`XPU`、`MTIA`、`HPU`、`PrivateUse1`（第三方后端自定义）。两类完全不同的东西：
-
-| activity | 记录什么               | 事件名字长什么样                                                | 需要什么            |
-| -------- | ------------------ | ------------------------------------------------------- | --------------- |
-| `CPU`    | **主机侧**所有算子调用      | `aten::flatten`、`aten::clone`                           | 什么都不要，永远可用      |
-| `CUDA` 等 | **设备侧** kernel 时间线 | CUDA kernel 的函数名（如 `Memcpy DtoD`、各种 elementwise kernel） | 对应硬件 + kineto 库 |
-
-关键认知：**`aten::xxx` 这个名字只存在于 CPU 侧**（dispatcher 在 CPU 上运行）。即使 tensor 在 GPU 上，每次调用在 CPU 侧也会留下事件（kernel launch），所以**看"dispatch 了哪个算子"永远用 `CPU`**；`CUDA` 是给你看 GPU 上实际跑了哪些 kernel、耗时多少的，两者通常一起开来对齐时间线。
-
-填了本机不支持的 activity 会怎样（本机无 GPU 实测）：
-
-```python
-with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
-    ...
-# 不报错，只产生 warning：CUDA is not available, disabling CUDA profiling
-# 结果里就只有 CPU 事件
-```
-
-查本机支持哪些：`torch.autograd.profiler._supported_activities()`（本机返回 `{ProfilerActivity.CPU}`）。
-
-### profiler 输出表格怎么读（用户 GPU 机实测案例）
-
-```python
-t = torch.randn(2, 3, 4, device='cuda')
-with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:  # ★ 两个都要开
-    t.flatten(0, 1)                    # 连续 → view
-    t.transpose(0, 1).flatten(0, 1)    # 非连续 → copy
-print(prof.key_averages().table())
-```
-
-**列的含义**（以 CPU-only 实测输出为例）：
-
-```
-     Name      Self CPU %   Self CPU   CPU total %   CPU total   CPU time avg   # of Calls
-aten::flatten     45.87%     64.712us      100.00%    141.077us     141.077us       1
-aten::view        54.13%     76.365us       54.13%     76.365us      76.365us       1
-```
-
-| 列                             | 含义                                                                    |
-| ----------------------------- | --------------------------------------------------------------------- |
-| `Name`                        | 事件名——**调用关系树状嵌套（flatten 是父，view 是子）                                   |
-| `Self CPU`                    | 算子**自己函数体**的耗时，**不含子调用**                                              |
-| `CPU total`                   | 算子**连同所有子调用**的总耗时。flatten：141.077us = 自己 64.712us + 子事件 view 76.365us |
-| `CPU time avg` / `# of Calls` | 平均单次耗时 / 调用次数                                                         |
-
-**GPU 实验的正确开法与"眼见为实"**：必须 `CPU + CUDA` 都开（只开 CUDA 时表里**一个 aten 算子都没有**，只剩 `cudaDeviceSynchronize`（runtime API 事件）和 `Activity Buffer Request`（kineto 内部开销）这类非算子噪音）。双开后表格多出 `Self CUDA` 列：
-
-- 连续张量 flatten：CPU 列 `aten::flatten → aten::view`，**Self CUDA 全为 0**——GPU 上零 kernel，"view 零拷贝"眼见为实；
-- 非连续 latten：CPU 列多出 `aten::clone/copy_/_unsafe_view`，**Self CUDA 出现 `Memcpy DtoD`**——显存里真的搬了数据。
-
-**噪音识别**：`Profiler clears events at the end of each cycle` warning（多周期采集默认只保留当前周期，想累积设 `acc_events=True`）与 `USDT:...profiler_start/stop` 日志（kineto 探针）都是 profiler 基础设施输出，与你的代码无关。
-
-## 1.3 为什么 profiler 能看出 dispatch 了哪个算子
-
-因为钩子（RecordFunction）**就埋在 dispatcher 里**——每一次"过 dispatcher"的调用都会被记录。反过来也成立：**不过 dispatcher 的调用，profiler 完全看不见**。
-
-这就是为什么连续张量 `flatten` 的事件流是 `aten::flatten → aten::view`，**没有 `aten::reshape`**：flatten 内部是普通 C++ 直接调用 `native::reshape_symint`（见 §二），没经过 dispatcher，所以不产生事件。profiler 事件流 ≈ "本次执行过 dispatcher 的算子清单"，这本身就是判断"哪一步过 dispatch"的实验手段。
-
-## 1.4 `TORCH_SHOW_DISPATCH_TRACE=1` 详解
-
-- **作用**：dispatcher 每次查表前打印一行日志，格式（2.12 `Dispatcher.cpp` 的 `_print_dispatch_trace`）：
-
-  ```
-  [call] op=[aten::flatten.using_ints], key=[AutogradCPU]
-   [redispatch] op=[aten::flatten.using_ints], key=[CPU]
-  ```
-
-  行首缩进表示调用嵌套层级。`key=[...]` 显示的是本次查表用的 dispatch key——**这是它和 profiler 的分工**：profiler 告诉你"跑了哪些算子"，trace 告诉你"每个算子按什么 key 逐级路由的"（能看到 Autograd → CPU 的逐级 redispatch，回答"dispatch 到底干了什么"）。
-
-- **一个大坑（实测）**：打印代码被编译宏包着（2.12 `Dispatcher.h`）：
-
-  ```cpp
-  #if defined(HAS_TORCH_SHOW_DISPATCH_TRACE) || !defined(NDEBUG)
-    if (show_dispatch_trace()) { detail::_print_dispatch_trace(...); }
-  #endif
-  ```
-
-  **官方 pip release 版定义了 `NDEBUG`，这段代码被编译掉了**——本机 pip 版实测设了环境变量也毫无输出。它只在 **debug 编译**（`DEBUG=1 python setup.py develop`）或显式加了 `HAS_TORCH_SHOW_DISPATCH_TRACE` 宏的构建里有效。你有自己编译的源码，能否用取决于编译类型（`torch.__config__.show()` 可看 build 配置）。用不了也不亏：profiler 已覆盖 90% 的需求。
-
-## 1.5 rg 是什么
-
-`rg` = **ripgrep**，一个为"在超大代码库里搜文本"而生的命令行工具（Rust 实现）。为什么源码阅读都用它而不是传统 `grep`：
-
-- **快**：pytorch 源码树几百万行，`grep -rn` 要几分钟，rg 通常秒出；
-- **聪明**：自动跳过 `.gitignore` 里的目录（不会搜进 build 产物和 third_party 垃圾）、自动跳过二进制文件；
-- 行号、颜色默认开启。
-
-常用法（源码导航三板斧）：
-
-```bash
-rg "func: flatten" aten/src/ATen/native/native_functions.yaml   # 精确定位算子定义
-                        # 找 C++ 实现
-rg "computeStride" aten/ -g "*.cpp"                              # 只搜 .cpp 文件
-```
-
-没有 rg 的替代方案：`grep -rn "pattern" path`（慢但到处都有）；VSCode 全局搜索（Ctrl+Shift+F）；没有本地代码时用 GitHub 网页版 code search（`github.com/search` 里限定 repo:pytorch/pytorch）。安装：`sudo apt install ripgrep` 或 `conda install -c conda-forge ripgrep`。
-
-# 二、dispatch vs 直接函数调用（核心概念）
-
-这是理解整个链路最关键的一对概念。
-
-**"过 dispatcher"的精确定义**：调用经过 `c10::Dispatcher` 的**算子注册表查表**。一次完整旅程：
-
-```
-at::clone(t)  ← 调用方：任何 C++ 代码（你写的扩展 / 生成的 TensorBody 包装 / PyTorch 自己的 kernel）
-  → 从 t 算出 DispatchKeySet（CPU/CUDA？requires_grad？……）
-  → 查表：先命中 Autograd key 的 kernel（记录 backward 所需信息）
-       → 内部 redispatch：摘掉 Autograd key 再查一次
-  → 命中 backend kernel（CPU/CUDA 真正的实现）
-  → 沿途触发：RecordFunction（profiler 靠它）、dispatch trace、torch.compile 的拦截点
-```
-
-**触发 dispatch 的入口只有三种**：① Python 绑定（生成的 THPVariable_xxx）；② C++ 里调 `at::foo(...)` 或 `tensor.foo()`（生成的包装方法）；③ 显式 `at::_ops::foo::call(...)`。
-
-> ⚠️ 上面例子里 `at::clone(t)` 的**调用方**不一定是"你"。它只是"某个调了 `at::` 包装形式的 C++ 代码"的占位例——在 flatten 链路中，这个调用方是 PyTorch 自己的 kernel：`reshape_symint` 内部写了 `self.clone(MemoryFormat::Contiguous)`（2.12 TensorShape.cpp:2104），写这行代码的是 PyTorch 的 kernel 作者，不是你。判别"谁调了它"靠 profiler 事件树的父子关系（clone 嵌在 flatten 下面），不是靠调用形式。
-
-**"不过 dispatcher"**：`native::reshape_symint(self, shape)` 就是一个**普通 C++ 函数调用**——编译器直接跳转，没有查表、没有 key、没有 RecordFunction、profiler 和 torch.compile 都看不见它。
-
-**为什么 flatten 里两者混用**（2.12 TensorShape.cpp:4178 的 flatten → :2058 的 reshape_symint）：
-
-| 调用 | 方式 | 原因 |
-|---|---|---|
-| `native::reshape_symint(...)` | 直接调用 | reshape 的逻辑（拼 shape + computeStride）所有后端共用同一份代码，没有"按设备路由"的需求；且 flatten 自己已经过了 autograd 包装，再调 `at::reshape` 会**重复记录** view 信息 |
-| `self.clone(...)` | 过 dispatcher | 拷贝需要 per-device kernel（CPU memcpy / CUDA copy kernel），必须查表选后端 |
-
-一句话：**dispatch = 按 tensor 属性动态路由到正确实现 + 触发 autograd/profiler/compile 等所有横切机制；直接调用 = 静态确定的普通函数跳转，什么都不触发。**
-
-## 为什么 clone 这一跳会 dispatch、flatten→reshape 这一跳不会？（机械层面）
-
-> ⚠️ **先澄清一个容易误读的表述**：本节说的"reshape 不过 dispatcher"**仅指 flatten→reshape 这个 kernel 内部跳转**。`aten::reshape` 作为算子本身照样在 dispatcher 表里注册了，你从 Python 调 `t.reshape(...)` 时**照常 dispatch**（见下一节"双层模型"的实测）。
-
-dispatch 不是算子的"属性"，而是**你调用的那个函数，函数体里有没有查表代码**。看两者各自进入的函数体：
-
-**`self.clone(...)`**（2.12 TensorShape.cpp:2104，reshape_symint 内部）→ 生成的 `Tensor::clone` → `at::_ops::clone::call(...)`。`call` 的函数体是 torchgen 生成的，生成器源码（torchgen/gen.py:667）白纸黑字写着它会长成什么样：
-
-```cpp
-// at::_ops::clone::call 的函数体（torchgen gen.py:667 生成）
-static auto op = create_clone_typed_handle();  // = c10::Dispatcher::singleton()
-                                               //   .findSchemaOrThrow("aten::clone", "")
-return op.call(self, memory_format);           // ← 进 dispatcher 查表跳转
-```
-
-也就是说 `at::clone` 这个包装的**整个函数体就是"查表 + 跳转"**——你永远摸不到 clone 的真实实现，是包装替你查的。
-
-**`native::reshape_symint(self, shape)`** → TensorShape.cpp:2058 手写的普通函数，函数体就是逻辑本身（拼 shape、computeStride）。没有表、没有 key，编译/链接期就确定了跳转目标。
-
-所以"一会儿 dispatch 一会儿内部调用"毫无神秘：**kernel 作者在写代码时，对每个调用点二选一**——调生成的包装（过表）或调手写的 `native::` 实现（直连）。
-
-## 为什么会有 dispatcher 这个概念？（设计动机）
-
-要解决的问题：**一个算子名对应 N 个实现，选哪个在运行时才知道**。clone 干什么取决于 tensor 的属性——CPU tensor 走 memcpy、CUDA tensor 走 copy kernel、`requires_grad=True` 还要记 backward 节点、torch.compile tracing 时还要被拦截。而写 reshape 的 TensorShape.cpp 是**设备无关文件，只编译一次**；甚至 CUDA 之外的后端可以是运行时加载的插件（PrivateUse1 自定义芯片），编译 libtorch 时根本不存在。
-
-C++ 原生的方案都不够：
-
-| 方案 | 为什么不行 |
-|---|---|
-| 调用点写 if/switch | 2000+ 算子 × N 后端，每加一个后端要改几千个调用点；插件后端编译期不存在，写不进 switch |
-| 虚函数 | vtable 只支持**一根轴**的多态（对象类型）。PyTorch 有多根正交的轴要**同时**生效：设备、autograd（`requires_grad` 是运行时标志，不是类型）、tracing、functionalization…… |
-| **注册表（dispatcher）** | 全局表：算子名 → 按优先级排列的 (DispatchKey → kernel)。调用时从 tensor 算出 key 位掩码，按优先级找第一个注册了的 kernel。加后端 = 运行时注册新 kernel，**调用点零改动** |
-
-外加两个杀手级收益：
-
-1. **横切机制的统一拦截点**：profiler 的 RecordFunction、dispatch trace、torch.compile 的拦截全挂在"查表"这一步——一次插桩覆盖全部 2000+ 算子。不过 dispatcher 的调用它们全看不见（flatten 链路的 profiler 里没有 `aten::reshape` 就是这个原因；但直接从 Python 调 `t.reshape()` 时 `aten::reshape` 照常出现，见下文"双层模型"）。
-2. **autograd 不用逐算子手写**：Autograd key 的优先级高于后端 key，注册一份包装就自动给所有算子套上 backward 记录。
-
-## 选择的判断准则
-
-> **实现是否随 tensor 的运行时属性（设备 / 梯度 / 追踪）而变？变 → 必须 dispatch；不变 → 直接调用。**
-
-- clone：拷贝实现按设备路由 → 过表。
-- reshape 的 shape 逻辑：纯整数运算，只碰 sizes/strides 元数据，CPU/CUDA 一字不差 → 直连（过表是纯浪费：dispatch 有开销——算 key、哈希查找、间接跳转；且 flatten 已过 autograd 层，再过表会重复记录 view）。
-
-## 双层模型：算子 vs kernel（解开"reshape 到底有没有 dispatch"的关键）
-
-必须区分同名的两个东西：
-
-| 层 | 例子 | 是什么 |
-|---|---|---|
-| **算子（op）** | `aten::reshape` | dispatcher 表里的一项，有 schema、有注册表项。**从 Python / `at::` 包装进入时永远过表** |
-| **kernel** | `at::native::reshape_symint` | 注册在表里的那个函数，查表的**终点**，逻辑本体 |
-
-"dispatch"发生在**到达 kernel 之前**：包装 → 查表 → kernel。kernel 自己当然"不 dispatch"——它是被查表找到的目的地。kernel 内部再调别人时，作者二选一：过表（`self.view(...)`/`at::clone(...)`）或直连（`native::yyy(...)`）。
-
-实测对照（pip torch 2.12，CPU）：
-
-```
-t.reshape(6, 4)   → profiler: aten::reshape → aten::view   ← reshape 作为算子，dispatch 了！
-t.flatten(0, 1)   → profiler: aten::flatten → aten::view   ← 没有 aten::reshape：
-                                                             flatten 的 kernel 直连 reshape 的 kernel，
-                                                             跳过了 reshape 作为算子的那次查表
-```
-
-所以完整回答"reshape 从 Python 到 C++ 的链路"：
-
-```
-t.reshape(6, 4)  [Python]
-① THPVariable_reshape                （build 生成的 Python 绑定）
-② at::_ops::reshape::call            （build 生成的包装，body = findSchemaOrThrow + op.call）
-③ Dispatcher 查表 "aten::reshape"
-   ├─ Autograd/ADInplaceOrView 包装   （生成的 VariableType kernel，记 view 关系供 backward）
-   ├─ redispatch 摘掉 autograd keys
-   └─ CompositeImplicitAutograd 注册项 → at::native::reshape_symint
-      （2.12 yaml:5141 reshape 无 dispatch 段 = Composite，所有后端共享这一个 kernel）
-④ at::native::reshape_symint          （TensorShape.cpp:2058，kernel 本体）
-⑤ 内部：is_contiguous 快路径 → self.view_symint(shape) —— 又一次 op 级 dispatch
-   → 命中 aten::view 的 kernel（yaml:8422 有 dispatch 段）→ alias 共享 storage
-```
-
-## SOP 省略的一环：注册表项（算子名 → kernel 的绑定证据）
-
-七步 SOP（profiler → yaml → rg → `at::native::xxx`）找到的 kernel **是合理且完整的终点**——dispatch 发生在到达它之前。但"算子名具体绑定到哪个函数"这一步，SOP 是靠 yaml 规则**推断**的，其直接证据是**注册表项**：
-
-```bash
-# build 之后（本机源码树未编译则无此目录）：
-rg "aten::reshape" build/aten/src/ATen/RegisterCompositeImplicitAutograd.cpp
-# 会看到类似：m.impl("aten::reshape", TORCH_FN(at::native::reshape_symint));
-```
-
-这一行 `m.impl(...)` 就是 dispatcher 表里的那一项——op 名（键）→ kernel 函数指针（值）。它是 SOP 第 4→5 步之间被黑盒化的拼图；不看它不影响找到实现，看了它链路才算"每一环都有实证"。
-
-## 代码生成地图：一个 yaml 输入，三个生成器，产物各有归属
-
-看懂完整链路的前提是知道**每个文件是谁生成的、从哪生成**。
-
-**唯一输入**：`aten/src/ATen/native/native_functions.yaml`。每个算子条目里的两个字段决定它的 Python 绑定长什么样：
-
-- `variants: function, method` —— `function` ⇒ 生成 `torch.op(...)` 形式；`method` ⇒ 生成 `t.op(...)` 形式（两个都写就两个都有）；
-- `python_module: nn`（可选）—— 有它则绑定进 `torch._C._nn` 而不是顶层 `torch`。
-
-**三个生成器及其产物**：
-
-| 生成器（源码自带） | 产物（build 生成） | 内容 |
-|---|---|---|
-| `torchgen/gen.py` | `build/aten/src/ATen/ops/{op}_ops.h` 等 per-op 头文件 | `at::_ops::{op}` 结构体（`call`/`redispatch`，body = 查表） |
-| 〃 | `build/aten/src/ATen/Functions.h/.cpp` | `at::{op}(...)` 命名空间函数 |
-| 〃 | `build/aten/src/ATen/core/TensorBody.h` + `TensorMethods.cpp` | `Tensor::{op}(...)` 方法 |
-| 〃 | `build/aten/src/ATen/Register{CPU,CUDA,CompositeImplicitAutograd,...}.cpp` | **注册表项** `m.impl("aten::{op}", TORCH_FN(kernel))` |
-| `tools/autograd/gen_python_functions.py` | `torch/csrc/autograd/generated/python_variable_methods.cpp` | `THPVariable_{op}`（**tensor 方法**绑定） |
-| 〃 | `torch/csrc/autograd/generated/python_torch_functions.cpp` | `torch.{op}` 绑定（**命名空间函数**） |
-| 〃 | `torch/csrc/autograd/generated/python_nn_functions.cpp`（及 linalg/fft/sparse/special/nested） | `torch._C._nn.{op}` 等分模块绑定 |
-| `tools/autograd/gen_autograd.py` | `torch/csrc/autograd/generated/VariableType*.cpp` | Autograd/ADInplaceOrView key 的包装 kernel（记 backward/view） |
-| `tools/pyi/gen_pyi.py` | `torch/_C/__init__.pyi` | 类型存根（IDE 用，**死路**） |
-
-模板都在源码树里：C++ 侧 `aten/src/ATen/templates/*.h/.cpp`，Python 绑定侧 `tools/autograd/templates/*.cpp`（含 `python_torch_functions.cpp`、`python_variable_methods.cpp`、`VariableType.cpp` 等，`${py_methods}` 占位符为证）。
-
-**挂载点**（生成的表怎么变成可调用的属性）：
-
-- `t.op` → `torch/csrc/autograd/python_variable.cpp:3887` `extern PyMethodDef variable_methods[]`，挂到 `torch._C.TensorBase` 类型；
-- `torch.op` → `torch/csrc/autograd/python_torch_functions_manual.cpp:539+` `gatherTorchFunctions_0/1/2()` 汇总生成的分片表，挂到 `torch` 模块。
-
-**拿到一个新算子，怎么知道找哪个绑定文件**（判定规则，非背诵——原文在 gen_python_functions.py:233-237：`is_method = python_module is None and Variant.method in variants`）：
-
-| 你写的调用形式 | 先查 | 落点 |
-|---|---|---|
-| `t.op(...)` | yaml 有 `variants: ..., method` | `python_variable_methods.cpp` 的 `THPVariable_op` |
-| `torch.op(...)` | yaml 有 `variants: function` | `python_torch_functions.cpp` |
-| `torch.nn.functional.op(...)` / `F.op` | `torch/nn/functional.py` 有 **Python 包装**（getsource 可读！） | 包装内部调 `torch._C._nn.op` → `python_nn_functions.cpp`（yaml 里 `python_module: nn`） |
-| `torch.linalg/fft/sparse/special.op` | 同上 | 对应 `python_{linalg,fft,sparse,special}_functions.cpp` |
-| `torch.save` / `torch.compile` / `torch.utils.*` | **不是 aten 算子**，yaml 里搜不到 | 纯 Python（`torch/*.py`），SOP 第 1 步 `inspect.getsource` 直接可读 |
-
-## 完整分析链路（任一算子通用）
-
-**链路图只画"运行时发生了什么"**（每行一个环节 + 一句话角色）：
-
-```
-① t.op(...) / torch.op(...)              Python 调用点
-   ↓
-② THPVariable_op（或 torch.op 的绑定函数）  解析 Python 参数 → 调 C++
-   ↓
-③ at::_ops::op::call()                    C++ 包装，body = 查表入口
-   ↓
-④ c10::Dispatcher 查表                     按 tensor 的 DispatchKeySet 路由：
-   ├─ Autograd/ADInplaceOrView 包装 kernel   先命中：记 backward / view 关系
-   └─ 注册表项 → kernel 函数指针             再命中：算子名绑定的实现
-   ↓
-⑤ at::native::xxx()                        kernel 本体，逻辑所在
-   ↓
-⑥ kernel 内部：直连别的 kernel，或再次过表调别的算子
-```
-
-**每层的归属与验证**（生成关系与验证手段从图中剥离，放进表格）：
-
-| 环节 | 产物文件 | 谁生成的 | 验证（无需 build） | 验证（需要 build） |
-|---|---|---|---|---|
-| ② Python 绑定 | `torch/csrc/autograd/generated/python_variable_methods.cpp`（`torch.op` 则是 `python_torch_functions.cpp`） | `tools/autograd/gen_python_functions.py` ← 模板 `tools/autograd/templates/python_variable_methods.cpp` | 读生成器源码（:233-237 的归属判定规则）与模板 | `rg THPVariable_op torch/csrc/autograd/generated/` |
-| ③ C++ 包装 | `build/aten/src/ATen/ops/{op}_ops.h` + `{op}.h` | `torchgen/gen.py` ← 模板 `aten/src/ATen/templates/Operator.h`、`Function.h` | **pip 版自带**：`torch/include/ATen/ops/{op}.h` 里能直接看到 `at::{op}()` 的整个 body 就是一行 `return at::_ops::{op}_{overload}::call(...)` | 读 build 产物 |
-| ④a Autograd 包装 | `torch/csrc/autograd/generated/VariableType*.cpp` | `tools/autograd/gen_autograd.py` ← 模板 `VariableType.cpp` | profiler 事件树的父子层级 | 读产物 |
-| ④b 注册表项 | `build/aten/src/ATen/Register{Key}.cpp` 里的 `m.impl("aten::op", TORCH_FN(kernel))` | `torchgen/gen.py` | **pip 版旁证**：`torch/include/ATen/ops/{op}_{key}_dispatch.h`（如 `flatten_compositeimplicitautograd_dispatch.h`）证明该 op 注册在哪个 key 下 | `rg "aten::op" build/aten/src/ATen/Register*.cpp` |
-| ④c 查表机制本身 | 源码自带：`aten/src/ATen/core/dispatch/Dispatcher.h` | 手写 | 直接读源码 | `TORCH_SHOW_DISPATCH_TRACE=1`（需 debug build）/ gdb |
-| ⑤ kernel 本体 | 源码自带：`aten/src/ATen/native/*.cpp` | 手写 | `rg "Tensor xxx" aten/src/ATen/native/` | — |
-| ⑥ 内部调用 | — | — | profiler 事件树：出现 `aten::zzz` = 过表；没出现 = 直连 | — |
-
-**两个通用判别动作**（比背这张表更重要）：
-
-1. **生成的文件自己会报出生**：每个生成文件的头注释都写着 `@generated by {生成器} from {模板}`——拿到任何一个文件，先看头注释就知道它在地图里的位置。pip 版 torch 的 `torch/include/ATen/ops/*.h` 全部可验。
-2. **验证分两类**：无需 build 就能做的（pip 自带头文件、生成器源码、模板、native kernel、profiler）；需要 build 才能做的（rg 生成的 .cpp、注册表项原文、dispatch trace）。分析时先用前一类走完全程，后一类只作为补充实证。
-
-## ④ 详解：控制流转数据流的断点（从 op.call 到 kernel 的正确走法）
-
-**这是整个链路唯一需要换工具的地方。** `op.call()` 再往里（`Dispatcher::call`，Dispatcher.h:179）是 2000+ 算子**共用的通用路由机器**——只有"算 key、查表、跳函数指针"，没有任何算子专属代码。顺着调用点往里读，永远读不到具体算子。算子与 kernel 的绑定是**加载期写进表里的数据**，要用搜索找"注册"，而不是找"调用"。
-
-**数据流的两个时刻**：
-
-```
-【加载期：import torch 时，main 之前】
-Register{Key}.cpp 里的静态初始化代码执行 m.impl(...)，把 kernel 函数指针塞进全局表
-【运行期：调用发生时】
-create_{op}_typed_handle() 拿算子句柄 → op.call(...) 算 DispatchKeySet → 查表 → 跳函数指针
-```
-
-**具体走法（有 build 目录时）**：
-
-```bash
-# ① 找注册项 + 通往 kernel 的最后一跳（同一文件内）
-rg -n "flatten" build/aten/src/ATen/RegisterCompositeImplicitAutograd*.cpp
-#   会看到：
-#   a) 包装定义：compositeimplicitautograd::flatten_using_ints(...) { return at::native::flatten(...); }
-#   b) 注册语句：m.impl("aten::flatten.using_ints", TORCH_FN(compositeimplicitautograd::flatten_using_ints));
-
-# ② 找 Autograd/view 包装（view 算子走 ADInplaceOrView key）
-rg -n "flatten" torch/csrc/autograd/generated/ADInplaceOrViewType*.cpp \
-                 torch/csrc/autograd/generated/VariableType*.cpp
-```
-
-选哪个 `Register{Key}.cpp`：按 yaml 推断（无 dispatch 段 → CompositeImplicitAutograd；有 dispatch 段 → 对应后端 key）。懒得推断就全搜 `rg "aten::op.overload" build/aten/src/ATen/Register*.cpp`，让文件自己命中。注册语句的固定格式 `m.impl("aten::{name}", TORCH_FN({kernel}))` 出自 torchgen/gen.py:1042。
-
-读完注册项里 `at::native::flatten` 这一跳，就回到"读普通 C++ 函数"的世界——kernel 本体及之后的内部调用（⑤⑥）不再有任何表查询的间接性。
-
-# 三、七步 SOP（不凭先验经验的推导流程）
+# 一、七步 SOP（不凭先验经验的推导流程）
 
 ## 第 1 步：判别"这个 op 有没有 Python 包装层"
 
@@ -393,7 +53,7 @@ torch.Tensor.flatten.__doc__   # 'flatten(start_dim=0, end_dim=-1) -> Tensor ...
 
 ## 第 3 步：profiler 拿"实际 dispatch 了哪个算子"的 ground truth
 
-"万一点进去的 Python flatten 调的不是 aten::flatten 呢？"——不猜，直接观测（原理见 §1.3）：
+"万一点进去的 Python flatten 调的不是 aten::flatten 呢？"——不猜，直接观测（原理：profiler 钩子埋在 dispatcher 里，见 [[PyTorch-源码分析工具箱]]）：
 
 ```python
 with profile(activities=[ProfilerActivity.CPU]) as prof:
@@ -449,11 +109,11 @@ with profile(activities=[ProfilerActivity.CPU]) as prof:
 
 通用技巧：**命中太多加特征（返回类型/左括号/参数类型），命中太少减特征；搜索是迭代收窄，不是一击即中。**
 
-## 第 6 步：读 C++，用 §二的概念分辨"过不过 dispatcher"
+## 第 6 步：读 C++，分辨"过不过 dispatcher"
 
 2.12 定位到 `aten/src/ATen/native/TensorShape.cpp:4178` 的 `at::native::flatten`：算完目标 shape 后 `return native::reshape_symint(self, shape);`——直接调用，不过 dispatcher（与第 3 步 trace 里没有 `aten::reshape` 互相印证）。顺到 `reshape_symint`（:2058）就能看到 view/copy 分水岭 `computeStride`（详见 [[pytorch-flatten-调用链路定位]]）。
 
-**通用判别**：`self.xxx()` / `at::xxx()` → 过 dispatcher（profiler 可见）；`native::xxx(...)` → 不过（profiler 不可见）。
+**通用判别**：`self.xxx()` / `at::xxx()` → 过 dispatcher（profiler 可见）；`native::xxx(...)` → 不过（profiler 不可见）。原理见 [[PyTorch-ATen-Dispatcher]]"过 dispatcher vs 直接函数调用"。
 
 ## 第 7 步：看懂 Python↔C++ 的胶水是怎么生成的
 
@@ -510,7 +170,77 @@ static PyObject* THPVariable_flatten(PyObject* self_, PyObject* args, PyObject* 
 
 **终极验证手段——gdb**：如果你的编译版带符号，`gdb --args python your_script.py`，然后 `break at::native::flatten`、`run`、`bt`，就能看到从 `THPVariable_flatten` 一路到 `computeStride` 的完整真实调用栈——不依赖任何"我以为"，栈帧就是真相。
 
-# 四、SOP 一页纸总结
+# 二、完整分析链路（任一算子通用）
+
+**链路图只画"运行时发生了什么"**（每行一个环节 + 一句话角色）：
+
+```
+① t.op(...) / torch.op(...)              Python 调用点
+   ↓
+② THPVariable_op（或 torch.op 的绑定函数）  解析 Python 参数 → 调 C++
+   ↓
+③ at::_ops::op::call()                    C++ 包装，body = 查表入口
+   ↓
+④ c10::Dispatcher 查表                     按 tensor 的 DispatchKeySet 路由：
+   ├─ Autograd/ADInplaceOrView 包装 kernel   先命中：记 backward / view 关系
+   └─ 注册表项 → kernel 函数指针             再命中：算子名绑定的实现
+   ↓
+⑤ at::native::xxx()                        kernel 本体，逻辑所在
+   ↓
+⑥ kernel 内部：直连别的 kernel，或再次过表调别的算子
+```
+
+**每层的归属与验证**（生成关系的完整参考见 [[PyTorch-代码生成管线]]）：
+
+| 环节 | 产物文件 | 谁生成的 | 验证（无需 build） | 验证（需要 build） |
+|---|---|---|---|---|
+| ② Python 绑定 | `torch/csrc/autograd/generated/python_variable_methods.cpp`（`torch.op` 则是 `python_torch_functions.cpp`） | `tools/autograd/gen_python_functions.py` ← 模板 `tools/autograd/templates/python_variable_methods.cpp` | 读生成器源码（:233-237 的归属判定规则）与模板 | `rg THPVariable_op torch/csrc/autograd/generated/` |
+| ③ C++ 包装 | `build/aten/src/ATen/ops/{op}_ops.h` + `{op}.h` | `torchgen/gen.py` ← 模板 `aten/src/ATen/templates/Operator.h`、`Function.h` | **pip 版自带**：`torch/include/ATen/ops/{op}.h` 里能直接看到 `at::{op}()` 的整个 body 就是一行 `return at::_ops::{op}_{overload}::call(...)` | 读 build 产物 |
+| ④a Autograd 包装 | `torch/csrc/autograd/generated/VariableType*.cpp` | `tools/autograd/gen_autograd.py` ← 模板 `VariableType.cpp` | profiler 事件树的父子层级 | 读产物 |
+| ④b 注册表项 | `build/aten/src/ATen/Register{Key}.cpp` 里的 `m.impl("aten::op", TORCH_FN(kernel))` | `torchgen/gen.py` | **pip 版旁证**：`torch/include/ATen/ops/{op}_{key}_dispatch.h`（如 `flatten_compositeimplicitautograd_dispatch.h`）证明该 op 注册在哪个 key 下 | `rg "aten::op" build/aten/src/ATen/Register*.cpp` |
+| ④c 查表机制本身 | 源码自带：`aten/src/ATen/core/dispatch/Dispatcher.h` | 手写 | 直接读源码 | `TORCH_SHOW_DISPATCH_TRACE=1`（需 debug build）/ gdb |
+| ⑤ kernel 本体 | 源码自带：`aten/src/ATen/native/*.cpp` | 手写 | `rg "Tensor xxx" aten/src/ATen/native/` | — |
+| ⑥ 内部调用 | — | — | profiler 事件树：出现 `aten::zzz` = 过表；没出现 = 直连 | — |
+
+**两个通用判别动作**（比背这张表更重要）：
+
+1. **生成的文件自己会报出生**：每个生成文件的头注释都写着 `@generated by {生成器} from {模板}`——拿到任何一个文件，先看头注释就知道它在地图里的位置。pip 版 torch 的 `torch/include/ATen/ops/*.h` 全部可验。
+2. **验证分两类**：无需 build 就能做的（pip 自带头文件、生成器源码、模板、native kernel、profiler）；需要 build 才能做的（rg 生成的 .cpp、注册表项原文、dispatch trace）。分析时先用前一类走完全程，后一类只作为补充实证。
+
+## ④ 详解：控制流转数据流的断点（从 op.call 到 kernel 的正确走法）
+
+**这是整个链路唯一需要换工具的地方。** `op.call()` 再往里（`Dispatcher::call`，Dispatcher.h:179）是 2000+ 算子**共用的通用路由机器**——只有"算 key、查表、跳函数指针"，没有任何算子专属代码。顺着调用点往里读，永远读不到具体算子。算子与 kernel 的绑定是**加载期写进表里的数据**，要用搜索找"注册"，而不是找"调用"。
+
+**数据流的两个时刻**：
+
+```
+【加载期：import torch 时，main 之前】
+Register{Key}.cpp 里的静态初始化代码执行 m.impl(...)，把 kernel 函数指针塞进全局表
+【运行期：调用发生时】
+create_{op}_typed_handle() 拿算子句柄 → op.call(...) 算 DispatchKeySet → 查表 → 跳函数指针
+```
+
+**具体走法（有 build 目录时）**：
+
+```bash
+# ① 找注册项 + 通往 kernel 的最后一跳（同一文件内）
+rg -n "flatten" build/aten/src/ATen/RegisterCompositeImplicitAutograd*.cpp
+#   会看到：
+#   a) 包装定义：compositeimplicitautograd::flatten_using_ints(...) { return at::native::flatten(...); }
+#   b) 注册语句：m.impl("aten::flatten.using_ints", TORCH_FN(compositeimplicitautograd::flatten_using_ints));
+
+# ② 找 Autograd/view 包装（view 算子走 ADInplaceOrView key）
+rg -n "flatten" torch/csrc/autograd/generated/ADInplaceOrViewType*.cpp \
+                 torch/csrc/autograd/generated/VariableType*.cpp
+```
+
+选哪个 `Register{Key}.cpp`：按 yaml 推断（无 dispatch 段 → CompositeImplicitAutograd；有 dispatch 段 → 对应后端 key）。懒得推断就全搜 `rg "aten::op.overload" build/aten/src/ATen/Register*.cpp`，让文件自己命中。注册语句的固定格式、三件套结构与分片机制详见 [[PyTorch-代码生成管线]]"Register 文件"一节。
+
+**注册表运行时可被第三方覆盖**（[[FlagGems]] 等）：理解 ④ 的数据流后，"为什么覆盖只拦过表调用、拦不到 kernel 内部直连"可以直接推出（机制详见 [[PyTorch-ATen-Dispatcher]]"注册表运行时可变"）。
+
+读完注册项里 `at::native::flatten` 这一跳，就回到"读普通 C++ 函数"的世界——kernel 本体及之后的内部调用（⑤⑥）不再有任何表查询的间接性。
+
+# 三、SOP 一页纸总结
 
 ```
 1. inspect.getsource 失败？ ──否──→ 读 Python 包装层（如 torch/_tensor.py）
@@ -528,5 +258,8 @@ static PyObject* THPVariable_flatten(PyObject* self_, PyObject* args, PyObject* 
 
 ## 相关页面
 
-- [[pytorch-flatten-调用链路定位]] — 用本方法论走完 flatten 全程的实例（2.12 行号）
-- [[PyTorch-ATen-Dispatcher]] — codegen 管线与 dispatch 机制总览
+- [[PyTorch-ATen-Dispatcher]] — 概念：双层模型、过表 vs 直连、设计动机、注册表与覆盖机制
+- [[PyTorch-代码生成管线]] — 文件地图：生成器/产物/绑定归属判定/Register 三件套
+- [[PyTorch-源码分析工具箱]] — profiler / dispatch trace / rg / gdb 详解
+- [[pytorch-flatten-调用链路定位]] — 用本 SOP 走完 flatten 全程的实例（2.12 行号）
+- [[FlagGems]] — 注册表覆盖机制的典型第三方应用

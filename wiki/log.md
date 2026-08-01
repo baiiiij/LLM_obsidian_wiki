@@ -268,3 +268,39 @@
 **下一步命令**：`rg -n "flatten" build/aten/src/ATen/RegisterCompositeImplicitAutograd*.cpp`——同一文件内可见 a) 包装定义（body 调 `at::native::flatten`，通往 kernel 的最后一跳）b) 注册语句 `m.impl("aten::flatten.using_ints", TORCH_FN(...))`（格式出自 torchgen gen.py:1042）。Autograd/view 包装：`rg "flatten" torch/csrc/autograd/generated/ADInplaceOrViewType*.cpp VariableType*.cpp`。
 
 **更新页面**：[[aten算子调用链定位方法论]] 新增"④ 详解"小节（两个时刻图 + 两条 rg 命令 + Register 文件选择规则）。
+
+## [2026-07-31] update | Register 三件套 + FlagGems 覆盖机制（对照其源码实证）
+
+用户实操发现 Register 文件中的 wrapper 三件套并两连问：①为什么好多 Register 文件都有这段代码？②FlagGems 原理是不是截断 dispatch / 替换 TORCH_FN？只能拦截走 dispatch 的算子吗？
+
+**Q1 解答**：wrapper（anonymous namespace，设备检查/DeviceGuard 注释对应 yaml 的 device_check/device_guard 字段）+ TORCH_LIBRARY_IMPL 静态初始化块 + m.impl 绑定 = torchgen 为每个 (op, key) 生成的标准三件套；分片机制（gen.py:2376-2384，CPU 4 片、Composite 1 片）下同一 (op,key) 只出现一次；若重复出现用 `rg -l` 诊断是否多个 build 目录。
+
+**Q2 解答**（核实 flag_gems/__init__.py 源码）：FlagGems 用 `torch.library.Library("aten","IMPL")` + Registrar 遍历 _FULL_CONFIG（700+ 条 overload级对照）批量注册到当前设备 backend key，`use_gems()` 退出时 `lib._destroy()` 恢复——**不截断 dispatch、不改 PyTorch 生成文件**，只是运行时改表项的值。用户"只能拦截走 dispatch 的算子"推论正确：kernel 内部直连拦不到（故只替换叶子算子）；按 key 粒度（CUDA 注册不影响 CPU）；autograd 层不受影响（Autograd key 先命中）。佐证：FlagGems 不注册 flatten/view/reshape（纯 view 无可加速），但注册 _unsafe_view/view_copy/alias_copy 等搬数据变体——flatten 拷贝路径的 at::_unsafe_view 过表可被拦。
+
+**更新页面**：[[PyTorch-ATen-Dispatcher]] 新增"注册表是运行时可变的：覆盖机制与 FlagGems"一节；[[aten算子调用链定位方法论]] ④ 详解补充三件套/分片事实 + 覆盖机制链接。
+
+## [2026-07-31] update | 覆盖机制精确化：表的真实结构 + 两种覆盖形态
+
+用户确认理解："把表项的值换成 Triton kernel"= 改 TORCH_LIBRARY_IMPL/m.impl 注册进去的目标表项，而非改代码。确认正确并补两层精确化。
+
+**更新页面**：[[PyTorch-ATen-Dispatcher]] 覆盖机制一节补充——
+- 表的真实结构（OperatorEntry.h:242-259）：每算子一个 OperatorEntry，kernels_ 按 key 存注册列表，dispatchTable_[key]=列表头部（最后注册者生效）；registerKernel/deregisterKernel_ 运行时增删重算（OperatorEntry.cpp:137/237/:484）；Register*.cpp 的 m.impl 只是加载期种子代码。
+- 覆盖两种形态：同 key 替换（mm 的 CUDA 格换值）vs 对 composite 算子放更具体 key（遮蔽 fallback）。共性：只改表，不碰代码。
+
+## [2026-07-31] reorg | PyTorch/FlagGems 内容大重组：三类内容解耦拆页
+
+用户反馈：本轮输出内容多、方法论页（536 行）杂乱，要求按大类（PyTorch / FlagGems / 其他）拆分、解耦大文档、理清引用。
+
+**问题诊断**：[[aten算子调用链定位方法论]] 混装三类内容——概念（dispatch/双层模型/代码生成）、工具参考（profiler/rg/trace）、操作流程（SOP）；FlagGems 内容埋在 PyTorch 概念页；flatten 页 title 与 index 摘要残留过时的 2.14 行号。
+
+**新建页面**：
+- [[PyTorch-代码生成管线]]（concept）— yaml→三个生成器→产物地图：三个世界、yaml 关键字段、绑定归属判定表、Register 三件套与分片、pip 自带头文件实证、@generated 头注释判别
+- [[PyTorch-源码分析工具箱]]（concept）— profiler（activities/表格读法/原理）/ TORCH_SHOW_DISPATCH_TRACE（NDEBUG 坑）/ rg（迭代收窄）/ gdb；验证手段分层表
+- [[FlagGems]]（entity）— 项目页：Library("aten","IMPL") 覆盖机制、use_gems/_destroy 生命周期、三条边界、不注册纯 view 算子的佐证、profiler 实证方法
+
+**重构页面**：
+- [[PyTorch-ATen-Dispatcher]] — 纯 dispatch 机制页：双层模型、过表 vs 直连（机械/准则）、设计动机、注册表（两个时刻 + OperatorEntry 结构）、运行时可变（覆盖两形态 + 三条边界摘要）；codegen/yaml 字段表移出至管线页，FlagGems 细节移至 entity 页
+- [[aten算子调用链定位方法论]] — 536→约 300 行：只留心智模型 + 七步 SOP + 完整链路图/分层表/④ 详解 + 一页纸；页首加前置阅读指针，概念与工具全部改为链接
+- [[pytorch-flatten-调用链路定位]] — title 修正为 2.12；相关页面接入新页
+
+**同步**：[[index]]（+3 页、修正 flatten 过时摘要）、[[overview]]（26 页：4 实体 + 16 概念 + 2 来源 + 2 问答 + 2 元；框架层/算子层状态更新）。全部 wikilink 已脚本验证零断链。

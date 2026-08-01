@@ -1,6 +1,6 @@
 ---
 type: query
-title: torch.Tensor.flatten 调用链路全解（view vs copy 判断，对照 2.14 源码实测）
+title: torch.Tensor.flatten 调用链路全解（view vs copy 判断，对照 2.12 源码）
 created: 2026-07-31
 updated: 2026-07-31
 sources: []
@@ -15,7 +15,7 @@ tags: [pytorch, aten, dispatcher, view, codegen]
 
 # 〇、先建立地图：PyTorch 代码的三个世界
 
-看 PyTorch 源码最大的困惑是"文件到底在哪"。其实只有三类：
+看 PyTorch 源码最大的困惑是"文件到底在哪"。其实只有三类（完整生成机制见 [[PyTorch-代码生成管线]]）：
 
 | 世界                   | 说明                | 例子                                                       |
 | -------------------- | ----------------- | -------------------------------------------------------- |
@@ -195,4 +195,6 @@ print(prof.key_averages().table())
 ## 相关页面
 
 - [[aten算子调用链定位方法论]] — 本文的"上游"：不凭先验经验推出这条链的七步 SOP
-- [[PyTorch-ATen-Dispatcher]] — codegen 管线与 dispatch 机制总览
+- [[PyTorch-ATen-Dispatcher]] — dispatch 机制：双层模型、过表 vs 直连、注册表
+- [[PyTorch-代码生成管线]] — 本文"三个世界"与文件归属的完整生成机制
+- [[PyTorch-源码分析工具箱]] — 本文实证工具（profiler / dispatch trace）的详解

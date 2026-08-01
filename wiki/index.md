@@ -14,6 +14,7 @@ updated: 2026-07-31
 - [[vLLM]] — 主流 LLM 推理框架；v0.20.2 MoERunner + 模块化 kernel 架构、TP/SP/EP/DP/PCP 通信节奏
 - [[DeepSeek]] — MoE 架构大模型系列，DP+EP 混合部署的典型代表
 - [[Triton]] — Python 风格 GPU 算子 DSL，vLLM MoE kernel 的实现语言
+- [[FlagGems]] — 智源 FlagOS 的 Triton 算子库：运行时覆盖 aten kernel（torch.library 改表，不截断 dispatch）；覆盖的三条边界
 
 ## Concepts（概念）
 
@@ -30,7 +31,9 @@ updated: 2026-07-31
 - [[EPLB]] — 专家并行负载均衡：冗余专家、逻辑/物理双层 ID、后台 rebalance
 - [[All-to-All]] — 集合通信原语对比（All-Reduce/All-Gather/Reduce-Scatter/All-to-All）
 - [[Context Parallel]] — 上下文并行（PCP/DCP）：超长序列切段的并行策略
-- [[PyTorch-ATen-Dispatcher]] — aten 算子路由系统：native_functions.yaml 原点、codegen 管线、view vs copy 分水岭
+- [[PyTorch-ATen-Dispatcher]] — aten 算子路由机制：双层模型（算子 vs kernel）、过表 vs 直连、注册表结构与运行时覆盖
+- [[PyTorch-代码生成管线]] — yaml → 三个生成器 → 产物的文件地图；新算子绑定归属判定；Register 三件套与分片；pip 自带头文件实证
+- [[PyTorch-源码分析工具箱]] — profiler（表格读法/activities）/ TORCH_SHOW_DISPATCH_TRACE（NDEBUG 坑）/ rg / gdb 详解
 
 ## Sources（来源摘要）
 
@@ -39,8 +42,8 @@ updated: 2026-07-31
 
 ## Queries（问答沉淀）
 
-- [[pytorch-flatten-调用链路定位]] — 对照 2.14 源码实测：flatten(TensorShape.cpp:4121)→reshape(:1976)→computeStride 判定 view/copy；含 build 生成 vs 源码自带文件速查表
-- [[aten算子调用链定位方法论]] — 不凭先验经验的七步 SOP：inspect.getsource 判别 Python 包装、docstring 拿 schema、profiler 拿 ground truth、按参数类型匹配 overload
+- [[pytorch-flatten-调用链路定位]] — 对照 2.12 源码：flatten(TensorShape.cpp:4178)→reshape(:2058)→computeStride 判定 view/copy；含文件速查表
+- [[aten算子调用链定位方法论]] — 不凭先验经验的七步 SOP + 完整分析链路（含 ④ 断点走法）；概念与工具拆为独立页
 
 ## Synthesis（综合分析）
 
