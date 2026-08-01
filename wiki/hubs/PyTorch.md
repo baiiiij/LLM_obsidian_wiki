@@ -1,19 +1,21 @@
 ---
 type: hub
-title: PyTorch 源码机制（大类粘合页）
+title: PyTorch（大类粘合页）
 created: 2026-07-31
 updated: 2026-07-31
 sources: []
 tags: [pytorch, hub, 导航]
 ---
 
-# PyTorch 源码机制
+# PyTorch
 
-> 本大类回答一个问题：**一个 PyTorch 算子调用，从 Python 到 device kernel，中间到底发生了什么？** 覆盖代码生成、dispatcher 路由、源码分析方法论，以及第三方库（[[FlagGems]]）如何利用这套机制。
+> 本大类覆盖 **PyTorch 这个领域的一切**：源码机制、算子实现、算法、API 用法、生态。
+> **当前内容集中在"源码机制"子线**——一个算子调用从 Python 到 device kernel 中间发生了什么：代码生成、dispatcher 路由、源码分析方法论，以及第三方库（[[FlagGems]]）如何利用这套机制。
+> 以后涉及 PyTorch 的实现/算法/API 等新内容，直接归入本大类，在下方新增子线即可。
 
-## 主线逻辑：四个阶段
+## 子线：源码机制（当前唯一子线）
 
-本大类所有页面都挂在同一条主线上——算子的一生：
+主线逻辑——算子的一生，四个阶段：
 
 ```
 ① 代码生成（build 前）      yaml → 生成器 → 各层代码         → [[PyTorch-代码生成管线]]

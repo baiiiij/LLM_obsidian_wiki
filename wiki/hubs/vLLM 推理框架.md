@@ -15,8 +15,8 @@ tags: [vllm, hub, 导航, moe]
 
 | 顺序 | 页面 | 为什么在这个位置 |
 |---|---|---|
-| 1 | [[LLM 前向计算]] | **背景**：token/hidden states、FFN = 两次 GEMM、计算与访存、权重复用——后续所有算子优化的判据都来自这里 |
-| 2 | [[MoE]] | **模型结构**：路由 + top-k 稀疏激活，决定了底层算子为什么长这样 |
+| 1 | [[LLM 前向计算]] | **背景**（属 [[LLM 与 MoE 模型]] 大类）：token/hidden states、FFN = 两次 GEMM、计算与访存、权重复用——后续所有算子优化的判据都来自这里 |
+| 2 | [[MoE]] | **模型结构**（同属 [[LLM 与 MoE 模型]] 大类）：路由 + top-k 稀疏激活，决定了底层算子为什么长这样 |
 | 3 | [[vLLM]] | **框架总览**：MoERunner + 模块化 kernel 架构、TP/SP/EP/DP/PCP 通信节奏——知道算子在框架里的位置 |
 | 4 | [[moe_align_block_size-代码路径]] | **调用链**：从 Qwen3MoeForCausalLM 到 kernel 的完整代码分支路径（来源摘要页，可当地图用） |
 | 5 | [[moe_align_block_size]] | **算子本体（前置）**：MoE 布局整理，朴素缺点 → 三段式前置计算 → naive/native 捷径 |
@@ -40,7 +40,7 @@ vLLM 多卡部署涉及的概念页，按需查阅：
 ## 延伸（本大类与其他大类的接口）
 
 - [[Triton]] — vLLM MoE kernel 的实现语言（算子语言）
-- [[PyTorch-ATen-Dispatcher]] — vLLM 自定义算子（`TORCH_LIBRARY` 注册）依赖的机制（PyTorch 大类）
+- [[PyTorch-ATen-Dispatcher]] — vLLM 自定义算子（`TORCH_LIBRARY` 注册）依赖的机制（[[PyTorch]] 大类）
 - [[FlagGems]] — 算子替换的另一条路线（覆盖既有 aten 算子 vs vLLM 的自研 kernel 注册）
 - [[DeepSeek]] — MoE 架构模型，DP+EP 混合部署的典型负载
 

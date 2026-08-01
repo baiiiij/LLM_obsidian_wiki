@@ -9,9 +9,9 @@ updated: 2026-07-31
 > 每次 ingest 后更新本文件。查询时先读这里定位页面。
 > 组织方式：**按知识大类分区**——每个大类有一个粘合页（hub，含阅读顺序）+ 成员清单。
 
-## PyTorch 源码机制 — 粘合页：[[PyTorch 源码机制]]
+## PyTorch — 粘合页：[[PyTorch]]
 
-算子从 Python 到 device kernel 的全过程：代码生成 → 加载注册 → 运行查表 → 运行时覆盖。
+PyTorch 领域的一切（机制/实现/算法/API）。当前内容集中在源码机制子线：算子从 Python 到 device kernel 的全过程。
 
 - [[PyTorch-ATen-Dispatcher]] — 机制：双层模型（算子 vs kernel）、过表 vs 直连、注册表结构与运行时覆盖
 - [[PyTorch-代码生成管线]] — 文件地图：yaml → 三个生成器 → 产物归属；新算子绑定判定；Register 三件套与分片
@@ -33,7 +33,9 @@ MoE token 在 vLLM 里经过哪些模块、算子、卡。
 
 - [[FlagGems]] — 实体：智源 FlagOS 的 Triton 算子库；torch.library 运行时覆盖 aten kernel（改表不截断 dispatch）；覆盖的三条边界
 
-## LLM 与 MoE 模型基础
+## LLM 与 MoE 模型 — 粘合页：[[LLM 与 MoE 模型]]
+
+模型领域的一切（结构/算法/训练与推理行为/代表模型）。当前内容集中在模型基础与结构子线：结构如何决定下层系统/算子的形态。
 
 - [[LLM 前向计算]] — 概念：从零背景页（token/FFN/GEMM/访存/权重复用），各算子页共同前置
 - [[MoE]] — 概念：混合专家模型入口（路由 + top-k；含 Shared/Latent/SP/EPLB 扩展）

@@ -16,3 +16,4 @@
 - 每个 wiki 页面必须带 YAML frontmatter（含 `type` 和 `sources[]`）
 - 页面之间用 `[[wikilink]]` 互相链接
 - 每次 ingest 后更新 `wiki/index.md`、`wiki/overview.md`，追加 `wiki/log.md`
+- **大类自动演化**：沉淀时若内容不属于任何现有知识大类，自动创建新大类（hub + index 分区 + overview 导航），命名规则与流程见 [[schema]] 的"大类的演化"——用户不会显式要求建大类
