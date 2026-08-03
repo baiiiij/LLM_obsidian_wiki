@@ -352,3 +352,13 @@
 **归属判断**：属现有 PyTorch 大类（源码机制子线的工具向延伸），不触发新大类。
 
 **同步**：[[PyTorch-源码分析工具箱]] gdb 小节加交叉引用指针；[[index]] PyTorch 分区新增条目；[[overview]] 30 页 + PyTorch 导航行更新。
+
+## [2026-08-03] query | debug 构建 vs release 构建的行为差异
+
+用户追问（承接联合调试）：编 DEBUG 版来研究流程，担心除性能外分支/设备选择/逻辑与 release 不同，白看一场。
+
+**沉淀**：新建 [[debug与release构建的行为差异]]（query 页）——结论"不会白看"：控制流/dispatch/设备选择两版同一份源码逐行一致，无功能性 #ifdef；构建类型只改优化程度与诊断代码。NDEBUG 编译掉的三类（`TORCH_INTERNAL_ASSERT_DEBUG_ONLY`、dispatch trace、C/CUDA assert）全是诊断代码而非决策代码；唯一行为差异是 invariant 破坏时 debug abort / release 静默继续——对研究者有利。真正的差异只有可观测性、时序、FP 末位。附可实证双保险：两版各跑同一脚本对比 profiler 事件序列（RecordFunction 钩子两版都在）。
+
+**归属判断**：属现有 PyTorch 大类，不触发新大类。
+
+**同步**：[[vscode-python-cpp-联合调试pytorch]] 前提节与相关页加交叉引用；[[PyTorch-源码分析工具箱]] 相关页补链；[[index]] / [[overview]] 更新（31 页）。

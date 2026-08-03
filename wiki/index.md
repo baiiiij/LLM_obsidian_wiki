@@ -19,6 +19,7 @@ PyTorch 领域的一切（机制/实现/算法/API）。当前内容集中在源
 - [[aten算子调用链定位方法论]] — 问答：不凭先验经验的七步 SOP + 完整分析链路（含 ④ 断点走法）
 - [[pytorch-flatten-调用链路定位]] — 问答：flatten 实例（2.12 行号），computeStride 判定 view/copy
 - [[vscode-python-cpp-联合调试pytorch]] — 问答：VSCode 双调试器（gdb + debugpy）单步进 C++，含 launch 配置与坑位
+- [[debug与release构建的行为差异]] — 问答：debug 版流程 = release 版流程（NDEBUG 只删诊断代码）+ profiler 实证法
 
 ## vLLM 推理框架 — 粘合页：[[vLLM 推理框架]]
 

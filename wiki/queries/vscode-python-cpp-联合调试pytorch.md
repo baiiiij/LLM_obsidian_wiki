@@ -30,7 +30,7 @@ REL_WITH_DEB_INFO=1 python setup.py develop  # 带符号但有优化：变量常
 
 验证：`python -c "import torch; print(torch.__config__.show())"`。
 
-> **pip 官方版 stripped + NDEBUG，断点永远 pending**，必须自编译。看控制流逻辑用 DEBUG=1；RelWithDebInfo 只适合"大概看栈"。
+> **pip 官方版 stripped + NDEBUG，断点永远 pending**，必须自编译。看控制流逻辑用 DEBUG=1；RelWithDebInfo 只适合"大概看栈"。debug 版看到的流程和 release 是否一致？一致——见 [[debug与release构建的行为差异]]。
 
 # 二、推荐工作流：C++ 启动 python + Python attach
 
@@ -116,6 +116,7 @@ debugpy 正常 launch 脚本，在 `import torch` 之后用 Python 断点暂停�
 ## 相关页面
 
 - [[pytorch-flatten-调用链路定位]] — 本文调试目标的五层调用链（断点该打在哪几层）
+- [[debug与release构建的行为差异]] — debug 版看到的流程和 release 一样吗？（一样，NDEBUG 只删诊断代码）
 - [[PyTorch-源码分析工具箱]] — gdb 的轻量替代：profiler / dispatch trace
 - [[aten算子调用链定位方法论]] — 断点走法对应的七步 SOP
 - [[PyTorch-ATen-Dispatcher]] — 调用栈中 VariableType / Dispatcher 各帧的机制背景

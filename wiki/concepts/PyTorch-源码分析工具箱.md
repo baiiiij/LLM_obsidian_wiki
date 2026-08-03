@@ -124,5 +124,6 @@ gdb --args python your_script.py
 ## 相关页面
 
 - [[aten算子调用链定位方法论]] — 这些工具在七步 SOP 中的使用时机
+- [[debug与release构建的行为差异]] — NDEBUG 到底编译掉了什么（本页 dispatch trace 坑的全景）
 - [[PyTorch-ATen-Dispatcher]] — profiler/trace 能观测 dispatch 的原理（RecordFunction 钩子在查表路径上）
 - [[PyTorch-代码生成管线]] — rg 搜索目标的文件地图
