@@ -12,11 +12,11 @@ updated: 2026-08-03
 
 - 目标与范围：见 [[purpose]]（LLM 算子开发，五层结构）
 - 来源数量：2
-- 页面数量：32（4 实体 + 16 概念 + 2 来源摘要 + 5 问答 + 3 粘合页 + 1 索引 + 1 本页）
+- 页面数量：33（4 实体 + 16 概念 + 3 来源摘要 + 5 问答 + 3 粘合页 + 1 索引 + 1 本页）
 
 ## 大类导航
 
-- **PyTorch** — 粘合页 [[PyTorch]]（当前为源码机制子线）：代码生成管线 / ATen Dispatcher / 源码分析工具箱 / 定位方法论 / flatten 实例（定位版 + 全流程逐层详解）/ VSCode 联合调试 / debug vs release 差异
+- **PyTorch** — 粘合页 [[PyTorch]]（当前为源码机制子线）：代码生成管线 / ATen Dispatcher / 源码分析工具箱 / 定位方法论 / flatten 实例（定位版 + 全流程逐层详解 + 白话分享版）/ VSCode 联合调试 / debug vs release 差异
 - **vLLM 推理框架** — 粘合页 [[vLLM 推理框架]]：vLLM / moe_align_block_size / Grouped GEMM / 并行策略网 / 来源页
 - **LLM 与 MoE 模型** — 粘合页 [[LLM 与 MoE 模型]]（当前为模型基础与结构子线）：LLM 前向计算 / MoE / Shared Experts / Latent MoE / DeepSeek / Triton
 - **FlagGems** — 入口 [[FlagGems]]（目前单页）
