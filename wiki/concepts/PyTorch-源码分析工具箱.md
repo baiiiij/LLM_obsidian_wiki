@@ -2,7 +2,7 @@
 type: concept
 title: PyTorch 源码分析工具箱（profiler / dispatch trace / rg / gdb）
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-03
 sources: []
 tags: [pytorch, profiler, ripgrep, 工具]
 ---
@@ -110,6 +110,8 @@ gdb --args python your_script.py
 ```
 
 需要带符号的自编译版本。栈帧就是真相，不依赖任何"我以为"。
+
+> VSCode 里 Python+C++ 双调试器联合调试（一个进程挂 gdb + debugpy）的完整配置与坑位见 [[vscode-python-cpp-联合调试pytorch]]。
 
 ## 验证手段的分层
 

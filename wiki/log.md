@@ -342,3 +342,13 @@
 **立法（写入两处）**：
 - schema.md 新增"大类的演化（自动扩展）"节：沉淀时强制归属判断；不属于任何现有大类 → 自动创建（hub + index 分区 + overview + log），无需用户显式指示；1~2 页可先单页入口、≥3 页补 hub；命名红线（领域名 vs 角度名、撞名处理）；内容扩展新角度时加子线而非新建大类
 - AGENTS.md 红线区新增一条指针指向 schema 该节，保证会话开始即可见
+
+## [2026-08-03] query | VSCode Python+C++ 联合调试自编译 PyTorch
+
+用户问：远程有自编译 PyTorch 源码，如何在 VSCode 里 Python+C++ 联合调试（从 `xxx.flatten()` 单步进 C++）。
+
+**沉淀**：新建 [[vscode-python-cpp-联合调试pytorch]]（query 页）——核心思路"一个 python 进程挂两个调试器"；前提（DEBUG=1 / REL_WITH_DEB_INFO 符号构建，pip 版 NDEBUG 无符号）；主推工作流（cppdbg 以 python 解释器为 program + `debugpy --listen --wait-for-client`，再 debugpy attach）与备选（debugpy launch + cppdbg attach）；launch.json 完整配置；坑位表（pending breakpoint 需 `set breakpoint pending on`、优化干扰、flatten 断点应打在 CompositeImplicitAutograd 共用的 `at::native::flatten`、Remote-SSH、compile_commands、CUDA 需 cuda-gdb）。
+
+**归属判断**：属现有 PyTorch 大类（源码机制子线的工具向延伸），不触发新大类。
+
+**同步**：[[PyTorch-源码分析工具箱]] gdb 小节加交叉引用指针；[[index]] PyTorch 分区新增条目；[[overview]] 30 页 + PyTorch 导航行更新。
