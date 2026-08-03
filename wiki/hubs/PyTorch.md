@@ -28,7 +28,7 @@ tags: [pytorch, hub, 导航]
 
 | 顺序 | 页面 | 为什么在这个位置 |
 |---|---|---|
-| 1 | [[pytorch-flatten-调用链路定位]] | **先建立直观**：拿 flatten 这个最简单的算子走完全程，看到"点进 .pyi 是死路 → yaml 反查 → kernel 源码"的完整实例 |
+| 1 | [[pytorch-flatten-调用链路定位]] | **先建立直观**：拿 flatten 这个最简单的算子走完全程，看到"点进 .pyi 是死路 → yaml 反查 → kernel 源码"的完整实例；读完想要逐行细节再看 [[pytorch-flatten-全流程逐层详解]] |
 | 2 | [[PyTorch-ATen-Dispatcher]] | **再理解机制**：双层模型（算子 vs kernel）、过表 vs 直连、为什么需要 dispatcher、注册表结构——实例里每一步的"为什么"都在这里 |
 | 3 | [[PyTorch-代码生成管线]] | **然后建立地图**：每个文件由谁生成、生成到哪；拿到新算子该找哪个文件 |
 | 4 | [[PyTorch-源码分析工具箱]] | **备好工具**：profiler / dispatch trace / rg / gdb 的用法与坑 |
@@ -45,10 +45,11 @@ tags: [pytorch, hub, 导航]
 | profiler 表格怎么读、activities 怎么选 | [[PyTorch-源码分析工具箱]] |
 | 自己分析一个新算子的完整调用链 | [[aten算子调用链定位方法论]] |
 | flatten 什么时候 view 什么时候 copy | [[pytorch-flatten-调用链路定位]] |
+| flatten 每个函数内部干什么、内存在哪动、CPU 还是 device | [[pytorch-flatten-全流程逐层详解]] |
 | 理解 FlagGems / vLLM 自定义算子怎么接管算子 | [[FlagGems]]、[[PyTorch-ATen-Dispatcher]]"注册表运行时可变" |
 
 ## 成员页清单
 
 - 概念：[[PyTorch-ATen-Dispatcher]]、[[PyTorch-代码生成管线]]、[[PyTorch-源码分析工具箱]]
-- 问答沉淀：[[aten算子调用链定位方法论]]、[[pytorch-flatten-调用链路定位]]
+- 问答沉淀：[[aten算子调用链定位方法论]]、[[pytorch-flatten-调用链路定位]]、[[pytorch-flatten-全流程逐层详解]]、[[vscode-python-cpp-联合调试pytorch]]、[[debug与release构建的行为差异]]
 - 外部应用：[[FlagGems]]（entity，FlagGems 大类入口）

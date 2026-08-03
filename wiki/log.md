@@ -362,3 +362,15 @@
 **归属判断**：属现有 PyTorch 大类，不触发新大类。
 
 **同步**：[[vscode-python-cpp-联合调试pytorch]] 前提节与相关页加交叉引用；[[PyTorch-源码分析工具箱]] 相关页补链；[[index]] / [[overview]] 更新（31 页）。
+
+## [2026-08-03] query | flatten 从 Python 到 device 的全流程逐层详解
+
+用户要求：把 `x.flatten()` 从 Python 端到 C++/device 的完整调用流程极详细地讲清——每个分支去哪、每个函数内部干什么、内存操作、CPU 还是 device 执行。
+
+**核对方式**：curl 拉取 `pytorch/pytorch@release/2.12` 的 15+ 个关键源码文件（python_variable.cpp / gen_python_functions.py / DispatchKeySet.h / DispatchKeyExtractor.h / Dispatcher.h / gen_variable_type.py / gen_inplace_or_view_type.py / TensorShape.cpp / TensorUtils.cpp / TensorFactories.cpp / EmptyTensor.cpp / Copy.cpp / cpu-CopyKernel.cpp / cuda-Copy.cu / native_functions.yaml / torchgen 相关生成器）逐行核对，修正/坐实了若干细节：ADInplaceOrView 由 TLS default_included_set 注入而非张量 keyset；VariableType 对 view 算子用 `AutoDispatchBelowAutograd`（gen_variable_type.py:1745-1748）；clone 实现位于 TensorFactories.cpp:2270；computeStride_impl 双指针算法（TensorUtils.cpp:327）；CUDA copy 的 copy_requires_temporaries/memcpy_eligible 判定（Copy.cu:381/264）。
+
+**沉淀**：新建 [[pytorch-flatten-全流程逐层详解]]（query 页）——L0~L6 分层：Python 属性查找 → THPVariable_flatten（解包/PythonArgParser/放 GIL/wrap）→ Tensor::flatten → _ops 句柄 → Dispatcher::call（DispatchKeySet 计算 + 四跳命中链：AutogradCPU→ADInplaceOrView→BackendSelect→CPU 槽 alias 到 composite）→ at::native::flatten（5 分支）→ reshape_symint 分水岭（computeStride 算法详解；view 分支 alias_with_sizes_and_strides 零拷贝；copy 分支 clone→empty_like 分配（CPU malloc / CUDA caching allocator）→copy_ 设备搬运（CPU 向量化 / GPU elementwise kernel 或 cudaMemcpyAsync）→_unsafe_view）；附"每步在哪执行/动什么内存"与"分支决策"两张总表 + 实证方法。
+
+**归属判断**：属现有 PyTorch 大类（源码机制子线的实例深挖），不触发新大类。
+
+**同步**：[[pytorch-flatten-调用链路定位]] 相关页互链（定位版 vs 详解版）；[[PyTorch]] hub 阅读顺序/速查表/成员清单更新（顺带补入此前缺失的 vscode 联合调试、debug vs release 两页）；[[index]] / [[overview]]（32 页）。

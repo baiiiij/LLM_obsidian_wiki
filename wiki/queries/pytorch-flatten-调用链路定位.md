@@ -194,6 +194,7 @@ print(prof.key_averages().table())
 
 ## 相关页面
 
+- [[pytorch-flatten-全流程逐层详解]] — 本文是"定位版"（怎么找到这些文件）；该页是"逐行详解版"（每个函数内部、分支、内存操作、CPU vs device）
 - [[aten算子调用链定位方法论]] — 本文的"上游"：不凭先验经验推出这条链的七步 SOP
 - [[PyTorch-ATen-Dispatcher]] — dispatch 机制：双层模型、过表 vs 直连、注册表
 - [[PyTorch-代码生成管线]] — 本文"三个世界"与文件归属的完整生成机制
