@@ -2,8 +2,8 @@
 type: entity
 title: vLLM
 created: 2026-07-30
-updated: 2026-07-30
-sources: ["raw/sources/moe_align_block_size交互讲解.html", "raw/sources/moe_align_block_size 路径.md"]
+updated: 2026-10-12
+sources: ["raw/sources/moe_align_block_size交互讲解.html", "raw/sources/moe_align_block_size 路径.md", "raw/sources/昇腾CANN与编程模型调研-2026-10.md", "raw/sources/Triton-on-Ascend调研-2026-10.md"]
 tags: [推理框架, 框架层]
 ---
 
@@ -58,6 +58,13 @@ tags: [推理框架, 框架层]
 - [[Latent MoE]]（降维-升维投影，kernel 前需 `_maybe_pad_hidden_states` 补零对齐）
 - [[序列并行 SP]]（消除 TP 下 gate 冗余）
 
+### 昇腾支持：vllm-ascend 插件（2026-10 调研）
+
+- **vllm-project/vllm-ascend** 是官方社区插件：2025-02 首版 v0.7.1rc1，v0.9.0（2025-06）起默认 V1 引擎；2026 年已支持 Ascend 950 的 W8A8/W4A8 动态量化、MXFP8 MC2 dispatch/combine、ACLGraph（NPU 版 [[CUDA Graph]]）、DeepSeek V4 融合算子，文档站最新稳定版 v0.13.0
+- 算子路径双轨：Triton kernel 经 [[triton-ascend]] 执行（pip 直接依赖）+ [[Ascend C]] 自定义算子框架
+- **Inductor 打通**：历史上 torch_npu 不支持 Inductor Triton codegen，vLLM-Ascend 靠自研 graph rewriter 做融合；torch_npu 26.1.0 起 Inductor 默认生成 Triton 算子（依赖 triton-ascend 3.2.2），vLLM-Ascend 2026-04 发起适配 RFC
+- 详见 [[CANN]] §框架对接
+
 ## 待补充方向
 
 - PagedAttention、Continuous Batching（[[purpose]] 中的关注点，待相关来源 ingest）
@@ -65,4 +72,4 @@ tags: [推理框架, 框架层]
 
 ## 参见
 
-- [[MoE]]、[[Grouped GEMM]]、[[moe_align_block_size]]、[[Triton]]
+- [[MoE]]、[[Grouped GEMM]]、[[moe_align_block_size]]、[[Triton]]、[[华为昇腾 Ascend]]

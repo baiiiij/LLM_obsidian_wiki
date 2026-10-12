@@ -382,3 +382,28 @@
 **产出**：新建 [[flatten全流程白话分享版]]（wiki/sources/，用户指定位置）——先补三个背景（张量=数据+说明书 / view=换标签 vs copy=搬货 / dispatcher=总机分诊台），再逐层白话讲解 6 层旅程（含医院分诊台类比：flatten 已挂号盖章，reshape 是科室内部直接喊人所以不重新排队；copy_ 因设备而异才必须回总机），附分支大全表、CPU/设备与数据操作总表、快问快答（会不会复制数据/GPU 动不动手/开销大不大）。
 
 **同步**：[[index]] / [[overview]]（33 页）。
+
+## [2026-10-12] ingest | 华为昇腾 Ascend 全栈调研（4 路并行网络调研，新建硬件层大类）
+
+用户要求网络调研昇腾算子开发（Triton/C/C++）、硬件、编程模型并沉淀为知识库。派出 4 个并行调研 agent（硬件架构 / CANN 软件栈 / Ascend C / Triton on Ascend），60+ 来源（以 hiascend 官方文档、GitHub 一手仓库、华为官方 keynote 为主），调研笔记落盘 raw/sources/。
+
+**新大类 ×2**：
+- **华为昇腾 Ascend**（硬件层首个大类）：hub [[华为昇腾 Ascend]] + index 分区 + overview 导航
+- **并行执行模型**（底层抽象层开局，单页入口 [[SIMT 与 SIMD 与 SPMD]]，成员 ≥3 再补 hub）
+
+**新建页面 ×12**：
+- 实体 ×2：[[Ascend NPU]]（310P/910/910B/910C 规格、910C=dual-die、950/960 roadmap、CloudMatrix 384）、[[CANN]]（软件栈分层、Host 编程模型、版本配套锁定、工具链）
+- 概念 ×4：[[Da Vinci 架构]]（AI Core 三单元、显式 buffer 层级、MTE、六队列乱序）、[[Ascend C]]（SPMD+Pipe/Que 流水线、Matmul API、Tiling、msOpGen 全流程）、[[triton-ascend]]（TTIR→Linalg→BiSheng 编译链、坑位清单、生态接通）、[[SIMT 与 SIMD 与 SPMD]]（执行模型辨析）
+- 对比 ×1：[[Ascend 与 NVIDIA GPU 对照]]（硬件/软件栈/算子语言/Triton 四张对照表）
+- 来源摘要 ×4：[[昇腾硬件架构调研-2026-10]]、[[昇腾CANN与编程模型调研-2026-10]]、[[AscendC算子开发调研-2026-10]]、[[Triton-on-Ascend调研-2026-10]]
+
+**更新页面 ×3**：[[vLLM]]（vllm-ascend 插件段落）、[[FlagGems]]（NPU 后端）、[[Triton]]（triton-ascend 链接）
+
+**关键知识点**：
+- 昇腾哲学：显式 buffer 层级 + DMA 流水（vs GPU cache + 海量线程）；AI Core = Cube（占算力 99%）+ Vector（宽 SIMD）+ Scalar；910B 起 AIC/AIV 核分离
+- 910C = 双 910B die 封装；950（2026）转向 SIMD+SIMT 混合 + FP8 + 自研 HBM——官方承认纯 SIMD 局限
+- Ascend C 心智模型：每个核跑一条 DMA→Vector/Cube→DMA 流水线（手工版 Triton + 显式 DMA）；TBE/TIK 已被官方废弃
+- triton-ascend 已入 triton-lang 官方组织（3.2.2 / CANN 9.1.0）；kernel 零改动迁移，但版本强耦合、tl.dot 无 fp8、num_warps 语义退化、UB Overflow 高频
+- 生态闭环：torch_npu 26.1.0 起 torch.compile Inductor 默认生成 Triton 算子（昇腾上 torch.compile → Triton 已打通）
+
+**值得深挖**：昇腾实战（msOpGen 跑通自定义算子）；FlashAttention 的 GPU vs 昇腾双实现对比；NVIDIA 硬件页补全（与对照页双向引用）；PTO-ISA 手写 kernel（比 Triton 快 2-15% 的旁证）。

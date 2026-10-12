@@ -2,9 +2,9 @@
 type: entity
 title: FlagGems
 created: 2026-07-31
-updated: 2026-07-31
-sources: []
-tags: [pytorch, triton, 算子库, dispatcher, 覆盖机制]
+updated: 2026-10-12
+sources: ["raw/sources/Triton-on-Ascend调研-2026-10.md"]
+tags: [pytorch, triton, 算子库, dispatcher, 覆盖机制, ascend]
 ---
 
 # FlagGems
@@ -51,6 +51,13 @@ with flag_gems.use_gems():
 ```
 
 关键观察点：**profiler 里的 `aten::mm` 事件名不变**（算子层未动），变化的是 CUDA 列的 kernel 名（kernel 层被换）——这就是"双层模型"下覆盖机制的直接可视化。
+
+## 昇腾 NPU 后端（2026-10 调研）
+
+FlagGems 已有正式 NPU 后端：`GEMS_VENDOR=ascend`，`flaggems-setup ascend-cann900` 一键装环境；C++ 封装算子有 `cpp-npu` 变体（dispatch key 用 **PrivateUse1**——与上文"按设备 key 注册"的原理直接对应），底层走多后端 `libtriton_jit`（CUDA/MUSA/NPU/IX），Triton kernel 经 [[triton-ascend]] 编译到昇腾。文档站有专门的 Ascend 调优页（Cube/Vector 双路径、UB 容量、`compile_mode` 等昇腾专属选项）。
+
+- 安装时默认优先 FlagTree（若后端提供），否则回退厂商 Triton（昇腾即 triton-ascend）
+- 已知坑示例：CANN libdevice 缺 `j0`/`j1` 曾导致 import 即挂（issue #5328，已加纯 Triton fallback）；`tl.swizzle2d` 在 Ascend 路径不可用
 
 ## 与知识库主线的关联
 

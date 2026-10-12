@@ -1,7 +1,7 @@
 ---
 type: index
 title: Wiki 内容目录
-updated: 2026-08-03
+updated: 2026-10-12
 ---
 
 # Index — 内容目录
@@ -35,7 +35,23 @@ MoE token 在 vLLM 里经过哪些模块、算子、卡。
 
 ## FlagGems（Triton 算子库）— 入口：[[FlagGems]]
 
-- [[FlagGems]] — 实体：智源 FlagOS 的 Triton 算子库；torch.library 运行时覆盖 aten kernel（改表不截断 dispatch）；覆盖的三条边界
+- [[FlagGems]] — 实体：智源 FlagOS 的 Triton 算子库；torch.library 运行时覆盖 aten kernel（改表不截断 dispatch）；覆盖的三条边界；已有正式 NPU 后端（GEMS_VENDOR=ascend）
+
+## 华为昇腾 Ascend — 粘合页：[[华为昇腾 Ascend]]
+
+昇腾全栈与 CUDA 生态的对照理解：硬件（Da Vinci）→ 软件栈（CANN）→ 算子开发（Ascend C / Triton）。
+
+- [[Ascend 与 NVIDIA GPU 对照]] — 对比：硬件/软件栈/算子语言/Triton 四张对照表，迁移地图（建议先读）
+- [[Da Vinci 架构]] — 概念：AI Core 三单元三流水线、显式 buffer 层级（L1/L0/UB）、MTE、六队列乱序执行
+- [[Ascend NPU]] — 实体：310P/910/910B/910C 规格表、910C=dual-die、950/960/970 roadmap、CloudMatrix 384
+- [[CANN]] — 实体：软件栈分层（AscendCL/GE/HCCL/aclnn/毕昇）、Host 编程模型、版本配套锁定、torch_npu
+- [[Ascend C]] — 概念：原生算子语言（SPMD+Pipe/Que 流水线、Matmul API、Tiling 一等公民、msOpGen 全流程）
+- [[triton-ascend]] — 概念：Triton 昇腾后端（TTIR→Linalg→BiSheng 编译链、能力矩阵与坑位、FlagGems/vLLM/torch.compile 生态接通）
+- 来源摘要：[[昇腾硬件架构调研-2026-10]] / [[昇腾CANN与编程模型调研-2026-10]] / [[AscendC算子开发调研-2026-10]] / [[Triton-on-Ascend调研-2026-10]]
+
+## 并行执行模型 — 入口：[[SIMT 与 SIMD 与 SPMD]]（单页，成员 ≥3 时补 hub）
+
+- [[SIMT 与 SIMD 与 SPMD]] — 概念：三种执行模型辨析；GPU 海量线程隐藏延迟 vs 昇腾显式流水隐藏延迟；950 转向 SIMD+SIMT 混合
 
 ## LLM 与 MoE 模型 — 粘合页：[[LLM 与 MoE 模型]]
 

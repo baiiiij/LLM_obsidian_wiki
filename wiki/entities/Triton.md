@@ -2,9 +2,9 @@
 type: entity
 title: Triton
 created: 2026-07-30
-updated: 2026-07-30
-sources: ["raw/sources/moe_align_block_size交互讲解.html"]
-tags: [算子语言, dsl, 算子层]
+updated: 2026-10-12
+sources: ["raw/sources/moe_align_block_size交互讲解.html", "raw/sources/Triton-on-Ascend调研-2026-10.md"]
+tags: [算子语言, dsl, 算子层, ascend]
 ---
 
 # Triton
@@ -30,10 +30,14 @@ b_ptrs = b_ptr + e * stride_be                       # 整块复用权重 W_e
 - 显式的指针算术与 mask 机制
 - `tl.program_id` 映射到 GPU grid
 
+## 非 NVIDIA 后端：triton-ascend
+
+Triton kernel 可跑在昇腾 NPU 上：[[triton-ascend]]（已迁入 triton-lang 官方组织）——编译路径为 TTIR → Linalg → BiSheng（非 TritonGPU→PTX），kernel 零改动、只改 host 侧 `.cuda()`→`.npu()`。本库的 [[Grouped GEMM]] 正是 triton-ascend 官方宣称与手写 [[Ascend C]] 有竞争力的代表算子。
+
 ## 待补充方向
 
 - Triton 编译模型、与 CUDA C++ 的取舍、TileLang 对比（待相关来源 ingest）
 
 ## 参见
 
-- [[Grouped GEMM]]、[[moe_align_block_size]]、[[vLLM]]
+- [[Grouped GEMM]]、[[moe_align_block_size]]、[[vLLM]]、[[triton-ascend]]、[[FlagGems]]
